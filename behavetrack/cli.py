@@ -4,6 +4,7 @@
   behavetrack analyze VIDEO [options]
   behavetrack filter VIDEO_OR_FOLDER... --behavior collective_motion [--clips]
   behavetrack analyze MOVIE.tif --mode neurons --analysis activity|neurites
+  behavetrack export-complexity RESULTS[:CONDITION]... [--run]   files for complexity-engine
 
 (`python -m behavetrack ...` works the same if the command isn't installed.)
 """
@@ -189,6 +190,35 @@ def cmd_filter(a):
         print(f"Clips: {root / 'clips'}/")
 
 
+def cmd_export_complexity(a):
+    from .export import ENGINE_INSTALL_HINT, ENGINE_RUNS, engine_available, export, run_engine
+
+    r = export(a.results, a.out, min_correlation=a.min_correlation)
+    for msg in r.skipped:
+        print(f"Skipped {msg}")
+    if not r.files:
+        sys.exit("Nothing to export.")
+    print(f"Wrote to {a.out}/:")
+    for name, path in r.files.items():
+        print(f"  {name:28s} -> complexity-engine profile '{ENGINE_RUNS[name][1]}'")
+    if a.run:
+        if not engine_available():
+            sys.exit("\n" + ENGINE_INSTALL_HINT)
+        run_engine(r, a.out)
+        print("\nComplexity reports:")
+        for name, folder in r.reports.items():
+            print(f"  {folder / 'report.html'}")
+    else:
+        print("\nTo analyze them, add --run, or use complexity-engine directly:")
+        for name, path in r.files.items():
+            pipeline, domain, signals, units = ENGINE_RUNS[name]
+            if pipeline == "timeseries":
+                print(f"  complexity-analysis --data {path} --domain {domain} "
+                      f"--signal-cols {','.join(signals)} --unit-cols {','.join(units)}")
+            else:
+                print(f"  complexity-network --data {path} --domain {domain}")
+
+
 def cmd_app(a):
     from streamlit.web import cli as stcli
 
@@ -211,6 +241,16 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="behavetrack",
                                 description="Track animals, people, cells and neurons in video and export behavior data.")
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    pe = sub.add_parser("export-complexity",
+                        help="write results in complexity-engine's format (and optionally run it)")
+    pe.add_argument("results", nargs="+",
+                    help="results folders; add :CONDITION to label one, e.g. results/video1:control")
+    pe.add_argument("-o", "--out", default="complexity_export", help="output folder (default complexity_export)")
+    pe.add_argument("--min-correlation", type=float, default=0.3,
+                    help="neurons: keep neuron pairs correlated at least this much (default 0.3)")
+    pe.add_argument("--run", action="store_true", help="also run complexity-engine and write its reports")
+    pe.set_defaults(func=cmd_export_complexity)
 
     pp = sub.add_parser("app", help="open the browser app")
     pp.add_argument("--port", type=int, help="port to serve on (default 8501)")
