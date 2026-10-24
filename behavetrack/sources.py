@@ -33,6 +33,12 @@ class Source:
     def frames(self, start: int = 0, stop: int | None = None) -> Iterator[tuple[np.ndarray, np.ndarray]]:
         raise NotImplementedError
 
+    def raw_frames(self, start: int = 0, stop: int | None = None) -> Iterator[np.ndarray]:
+        """Unscaled intensities as float32 (no contrast stretch or clipping), for
+        brightness measurements such as calcium imaging."""
+        for _, g in self.frames(start, stop):
+            yield g * 255.0
+
 
 class VideoSource(Source):
     is_video = True
@@ -84,6 +90,11 @@ class StackSource(Source):
             g = np.clip((self.stack[i].astype(np.float32) - self.lo) / (self.hi - self.lo), 0, 1)
             disp = cv2.cvtColor((g * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
             yield disp, g
+
+    def raw_frames(self, start=0, stop=None):
+        stop = self.n_frames if stop is None else min(stop, self.n_frames)
+        for i in range(start, stop):
+            yield self.stack[i].astype(np.float32)
 
 
 # ------------------------------------------------------------------ readers

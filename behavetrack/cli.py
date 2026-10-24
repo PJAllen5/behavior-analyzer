@@ -2,6 +2,7 @@
 
   python -m behavetrack analyze VIDEO [options]
   python -m behavetrack filter VIDEO_OR_FOLDER... --behavior collective_motion [--clips]
+  python -m behavetrack analyze MOVIE.tif --mode neurons --analysis activity|neurites
 """
 from __future__ import annotations
 
@@ -12,29 +13,57 @@ from pathlib import Path
 import pandas as pd
 
 from .analyze import COLLECTIVE, DISORDERED, MILLING, RESTING
-from .pipeline import Settings, cell_settings, extract_clip, run
+from .pipeline import Settings, cell_settings, extract_clip, neuron_settings, run
 from .sources import ALL_EXT as VIDEO_EXT
-BEHAVIORS = [COLLECTIVE, MILLING, DISORDERED, RESTING, "interaction"]
+BEHAVIORS = [COLLECTIVE, MILLING, DISORDERED, RESTING, "interaction", "network_burst"]
 
 
 def _add_common(p: argparse.ArgumentParser):
-    p.add_argument("--mode", choices=["animals", "cells"], default="animals",
-                   help="animals: animals/people in video (default). cells: microscope time-lapse")
-    g = p.add_argument_group("cells mode")
+    p.add_argument("--mode", choices=["animals", "cells", "neurons"], default="animals",
+                   help="animals: animals/people in video (default). cells: microscope time-lapse. "
+                        "neurons: calcium imaging or neurite growth")
+    g = p.add_argument_group("cells and neurons modes")
     g.add_argument("--pixel-size", type=float, default=0.0,
                    help="microns per pixel (default: read from the file, else results in pixels)")
     g.add_argument("--frame-interval", type=float, default=0.0,
                    help="seconds between frames (default: read from the file)")
     g.add_argument("--channel", type=int, default=0, help="channel to analyze (0 = first)")
-    g.add_argument("--cells-look", choices=["auto", "bright", "dark"], default="auto",
+    g.add_argument("--cells-look", choices=["auto", "bright", "dark"], default=None,
                    help="bright: fluorescent cells/nuclei; dark: darker than background; "
-                        "auto: anything different from the background (e.g. phase contrast)")
+                        "auto: anything different from the background (e.g. phase contrast). "
+                        "Default: auto in cells mode, bright in neurons mode")
     g.add_argument("--cell-diameter", type=float, default=0.0,
                    help="typical cell diameter in pixels (default: automatic)")
     g.add_argument("--threshold-adjust", type=float, default=0.0,
                    help="-0.5..0.5: negative finds fainter cells, positive is stricter")
     g.add_argument("--no-split", action="store_true", help="don't separate touching cells")
     g.add_argument("--no-divisions", action="store_true", help="don't look for cell division")
+    g = p.add_argument_group("neurons mode (--cells-look, --cell-diameter and --threshold-adjust "
+                             "also apply; cell diameter means the cell body)")
+    g.add_argument("--analysis", choices=["activity", "neurites"], default="activity",
+                   help="activity: firing in calcium/voltage imaging (default). "
+                        "neurites: axon and dendrite growth")
+    g.add_argument("--find-by", choices=["activity", "brightness"], default="activity",
+                   help="activity: find neurons that flicker (default). brightness: find bright cell "
+                        "bodies, which also counts neurons that never fire")
+    g.add_argument("--no-drift", action="store_true", help="activity: don't correct stage drift")
+    g.add_argument("--neuropil", type=float, default=0.7,
+                   help="activity: share of the surrounding haze to subtract (0 = none, default 0.7)")
+    g.add_argument("--event-sd", type=float, default=3.5,
+                   help="activity: an event must rise this many noise levels above rest (default 3.5)")
+    g.add_argument("--min-event", type=float, default=0.05,
+                   help="activity: smallest event in ΔF/F (default 0.05; use 0 for voltage dyes)")
+    g.add_argument("--baseline-window", type=float, default=60.0,
+                   help="activity: seconds over which the resting level is estimated (default 60)")
+    g.add_argument("--burst-window", type=float, default=0.5,
+                   help="activity: neurons starting within this many seconds fire together (default 0.5)")
+    g.add_argument("--burst-fraction", type=float, default=0.3,
+                   help="activity: share of active neurons needed for a network burst (default 0.3)")
+    g.add_argument("--neurite-width", type=float, default=3.0,
+                   help="neurites: typical neurite thickness in pixels (default 3)")
+    g.add_argument("--frame-step", type=int, default=1, help="neurites: analyze every Nth frame")
+    g.add_argument("--sholl-step", type=float, default=10.0,
+                   help="neurites: spacing of Sholl rings in µm (pixels if uncalibrated; default 10)")
     g = p.add_argument_group("detection (animals mode)")
     g.add_argument("--detector", choices=["motion", "yolo"], default="motion",
                    help="motion: anything moving on a still camera (default). "
@@ -62,10 +91,20 @@ def _add_common(p: argparse.ArgumentParser):
 
 
 def _settings(a) -> Settings:
+    if a.mode == "neurons":
+        return neuron_settings(
+            neural_analysis=a.analysis, pixel_size_um=a.pixel_size, frame_interval_s=a.frame_interval,
+            channel=a.channel, cell_appearance=a.cells_look or "bright", cell_diameter_px=a.cell_diameter, threshold_adjust=a.threshold_adjust,
+            find_neurons_by=a.find_by, correct_drift=not a.no_drift, neuropil_factor=a.neuropil,
+            event_threshold_sd=a.event_sd, min_event_dff=a.min_event,
+            baseline_window_s=a.baseline_window, burst_window_s=a.burst_window,
+            burst_min_fraction=a.burst_fraction, neurite_width_px=a.neurite_width,
+            frame_step=a.frame_step, sholl_step_um=a.sholl_step, start_s=a.start,
+            max_seconds=a.max_seconds, annotate=not a.no_video)
     if a.mode == "cells":
         return cell_settings(
             pixel_size_um=a.pixel_size, frame_interval_s=a.frame_interval, channel=a.channel,
-            cell_appearance=a.cells_look, cell_diameter_px=a.cell_diameter,
+            cell_appearance=a.cells_look or "auto", cell_diameter_px=a.cell_diameter,
             threshold_adjust=a.threshold_adjust, split_touching=not a.no_split,
             detect_divisions=not a.no_divisions, start_s=a.start, max_seconds=a.max_seconds,
             annotate=not a.no_video)
@@ -91,7 +130,7 @@ def _videos(paths: list[str]) -> list[Path]:
 def cmd_analyze(a):
     out = Path(a.out) if a.out else Path(a.video).with_name(Path(a.video).stem + "_behavior")
     summary = run(a.video, out, _settings(a))
-    summary.pop("seconds_in_each_behavior", None) if a.mode == "cells" else None
+    summary.pop("seconds_in_each_behavior", None) if a.mode != "animals" else None
     print(json.dumps({k: v for k, v in summary.items() if k != "settings"}, indent=2))
     print(f"\nData files written to: {out}/")
 
@@ -108,11 +147,13 @@ def cmd_filter(a):
             print(f"Using earlier results for {v.name}")
         else:
             run(v, res, s)
-        if a.behavior == "interaction":
-            df = pd.read_csv(res / "interactions.csv") if (res / "interactions.csv").stat().st_size > 1 else pd.DataFrame()
+        if a.behavior in ("interaction", "network_burst"):
+            f = res / ("interactions.csv" if a.behavior == "interaction" else "bursts.csv")
+            df = pd.read_csv(f) if f.exists() and f.stat().st_size > 1 else pd.DataFrame()
             df = df[df["duration_s"] >= a.min_seconds] if not df.empty else df
         else:
-            df = pd.read_csv(res / "behaviors.csv") if (res / "behaviors.csv").stat().st_size > 1 else pd.DataFrame()
+            f = res / "behaviors.csv"
+            df = pd.read_csv(f) if f.exists() and f.stat().st_size > 1 else pd.DataFrame()
             df = df[(df["behavior"] == a.behavior) & (df["duration_s"] >= a.min_seconds)] if not df.empty else df
         for i, r in enumerate(df.to_dict("records")):
             r = {"video": str(v), **r}

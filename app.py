@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from behavetrack.pipeline import Settings, cell_settings, extract_clip, playback_fps, run
+from behavetrack.pipeline import Settings, cell_settings, extract_clip, neuron_settings, playback_fps, run
 
 DATA = Path(__file__).parent / "app_data"
 UPLOADS, RESULTS = DATA / "uploads", DATA / "results"
@@ -54,7 +54,9 @@ def _csv(p: Path) -> pd.DataFrame:
 def load(name: str, stamp: float) -> dict:  # stamp: re-load when results change
     d = RESULTS / name
     out = {"summary": json.loads((d / "summary.json").read_text())}
-    for f in ("frames", "behaviors", "interactions", "tracks", "cells", "msd", "lineage"):
+    for f in ("frames", "behaviors", "interactions", "tracks", "cells", "msd", "lineage",
+              "neurons", "events", "bursts", "traces_dff", "correlations",
+              "neurite_frames", "growth_cones", "sholl"):
         out[f] = _csv(d / f"{f}.csv")
     return out
 
@@ -69,7 +71,7 @@ def zip_folder(d: Path) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for f in d.iterdir():
-            if f.is_file() and f.suffix in {".csv", ".json"}:
+            if f.is_file() and f.suffix in {".csv", ".json", ".png"}:
                 z.write(f, f.name)
     return buf.getvalue()
 
@@ -156,21 +158,303 @@ def paths_chart(tracks: pd.DataFrame, L: str, unit: str) -> alt.Chart:
     return (lines + origin).properties(height=360, width=360)
 
 
+def raster_chart(ev: pd.DataFrame, bursts: pd.DataFrame, n: int) -> alt.Chart:
+    """One tick per firing event, one row per neuron; network bursts shaded."""
+    row = max(2, min(14, int(420 / max(n, 1))))
+    y = alt.Y("neuron_id:Q", title="Neuron", scale=alt.Scale(domain=[0.5, n + 0.5], nice=False, reverse=True),
+              axis=alt.Axis(tickMinStep=1, format="d"))
+    ticks = alt.Chart(ev).mark_tick(orient="vertical", thickness=1.5, size=row, color=SERIES).encode(
+        x=alt.X("onset_s:Q", title="Time (seconds)", scale=alt.Scale(nice=False)), y=y,
+        tooltip=[alt.Tooltip("neuron_id:Q", title="Neuron"), alt.Tooltip("onset_s:Q", title="Starts at (s)"),
+                 alt.Tooltip("amplitude_dff:Q", title="Size (ΔF/F)", format=".2f"),
+                 alt.Tooltip("half_width_s:Q", title="Half-width (s)")])
+    layers = [ticks]
+    if not bursts.empty:
+        b = bursts.assign(end_s=bursts["start_s"] + bursts["duration_s"])
+        layers.insert(0, alt.Chart(b).mark_rect(color="#eb6834", opacity=0.18).encode(
+            x="start_s:Q", x2="end_s:Q",
+            tooltip=[alt.Tooltip("burst:Q", title="Network burst"), alt.Tooltip("start_s:Q", title="Starts at (s)"),
+                     alt.Tooltip("neurons:Q", title="Neurons taking part")]))
+    return alt.layer(*layers).properties(height=max(160, min(460, row * n + 20)))
+
+
+def traces_chart(tr: pd.DataFrame, ids: list[int]) -> alt.Chart:
+    """ΔF/F of a few neurons, one small panel each."""
+    stride = max(1, int(np.ceil(len(tr) / 3000)))
+    cols = {f"neuron_{i}": f"Neuron {i}" for i in ids if f"neuron_{i}" in tr}
+    d = tr.iloc[::stride][["time_s", *cols]].rename(columns=cols).melt("time_s", var_name="Neuron", value_name="dff")
+    return alt.Chart(d).mark_line(strokeWidth=1.2, color=SERIES).encode(
+        x=alt.X("time_s:Q", title="Time (seconds)", scale=alt.Scale(nice=False)),
+        y=alt.Y("dff:Q", title="ΔF/F"),
+        tooltip=["Neuron", alt.Tooltip("time_s:Q", title="Time (s)"), alt.Tooltip("dff:Q", title="ΔF/F", format=".3f")],
+    ).properties(height=70).facet(row=alt.Row("Neuron:N", title=None, sort=list(cols.values()),
+                                              header=alt.Header(labelAngle=0, labelAlign="left")),
+                                  spacing=6).resolve_scale(y="independent")
+
+
+def per_neuron_chart(df: pd.DataFrame, x: str, y: str, x_title: str, y_title: str) -> alt.Chart:
+    """One line per neuron; hover to pick one out."""
+    sel = alt.selection_point(fields=["neuron_id"], on="pointerover", nearest=True, empty=False)
+    return alt.Chart(df).mark_line(strokeWidth=1.8, point=alt.OverlayMarkDef(size=18)).encode(
+        x=alt.X(f"{x}:Q", title=x_title, scale=alt.Scale(nice=False)),
+        y=alt.Y(f"{y}:Q", title=y_title),
+        detail="neuron_id:N",
+        color=alt.condition(sel, alt.value("#eb6834"), alt.value(SERIES)),
+        opacity=alt.condition(sel, alt.value(1), alt.value(0.45)),
+        tooltip=[alt.Tooltip("neuron_id:N", title="Neuron"), alt.Tooltip(f"{x}:Q", title=x_title),
+                 alt.Tooltip(f"{y}:Q", title=y_title, format=".1f")],
+    ).add_params(sel).properties(height=280)
+
+
 def time_label(summary: dict, seconds: float) -> str:
     if summary.get("mode") == "cells":
         return f"{seconds / 60:.0f} min"
     return f"{seconds:.1f} s"
 
 
+def show_activity(r: dict):
+    s, ns, fr = r["summary"], r["summary"].get("neurons", {}), r["frames"]
+    if not s.get("time_known"):
+        st.warning("The file has no frame rate, so 1 frame is counted as 1 second. Set it under "
+                   "Microscope calibration and analyze again.", title="Frame timing unknown")
+    n = ns.get("neurons_found", 0)
+    with st.container(horizontal=True):
+        st.metric("Neurons", n, border=True,
+                  help="Found by their flicker, or by brightness if you chose 'All visible'.")
+        st.metric("Firing", f"{ns.get('active_neurons', 0)} of {n}", border=True,
+                  help="Neurons with at least one firing event.")
+        st.metric("Events per minute", ns.get("mean_events_per_min", "–"), border=True,
+                  help="Average over the neurons that fire.")
+        st.metric("Network bursts", ns.get("network_bursts", 0), border=True,
+                  help=f"Moments when at least {ns.get('burst_needs_neurons', '–')} neurons start firing "
+                       f"together. {ns.get('bursts_per_min', 0)} per minute; average gap "
+                       f"{ns.get('mean_interburst_interval_s') or '–'} s.")
+        sync = ns.get("mean_pairwise_correlation")
+        st.metric("Synchrony", f"{sync:.2f}" if sync is not None else "–", border=True,
+                  help="Average correlation between the activity of every pair of firing neurons. "
+                       "0 = independent, 1 = identical.")
+    if not n:
+        st.info("No neurons were found in this movie.")
+        return
+    vid, rois = r["dir"] / "annotated.mp4", r["dir"] / "rois.png"
+    left, right = st.columns([3, 2])
+    with left:
+        if vid.exists():
+            st.video(str(vid), alt="Movie with each neuron outlined; outlines light up while it fires")
+            st.caption("Each neuron is outlined. Its outline turns yellow while it fires.")
+        else:
+            st.caption("No annotated video for this run.")
+    with right:
+        if rois.exists():
+            st.image(str(rois), caption="Left: average image. Right: activity map (bright = pixels that "
+                                        "flicker together). Numbers are neuron IDs.")
+        frac = ns.get("fraction_events_in_bursts")
+        if frac is not None:
+            st.markdown(f"**{frac:.0%}** of firing events happen during network bursts. "
+                        f"Median event size **{ns.get('median_amplitude_dff')} ΔF/F**, lasting about "
+                        f"**{ns.get('median_half_width_s')} s** at half height.")
+        if ns.get("max_drift_px"):
+            st.caption(f"Drift corrected: up to {ns['max_drift_px']} pixels.")
+    ev, bu = r["events"], r["bursts"]
+    if not ev.empty:
+        st.markdown("**Who fires when**")
+        st.caption("Each tick is one firing event; each row is one neuron. Shaded bands are network bursts.")
+        st.altair_chart(raster_chart(ev, bu, n), width="stretch",
+                        alt="Raster plot of firing events per neuron over time")
+    if not fr.empty:
+        st.markdown("**Share of neurons firing**")
+        st.altair_chart(line_chart(fr, "time_s", {"fraction_firing": "Share firing"}, "Time (seconds)",
+                                   "Share of neurons", [SERIES], (0, 1)),
+                        width="stretch", alt="Share of neurons firing over time")
+    tr, nn = r["traces_dff"], r["neurons"]
+    if not tr.empty and not nn.empty:
+        st.markdown("**Activity of single neurons (ΔF/F)**")
+        top = nn.sort_values("events", ascending=False)["neuron_id"].head(5).tolist()
+        pick = st.multiselect("Neurons to show", nn["neuron_id"].tolist(), default=top,
+                              max_selections=12, key=f"tr_{r['dir'].name}")
+        if pick:
+            st.altair_chart(traces_chart(tr, pick), width="stretch", alt="ΔF/F traces of chosen neurons")
+    st.subheader("Data")
+    with st.expander(f"Neurons ({len(nn)})", expanded=True):
+        st.dataframe(nn, hide_index=True, alt="One row per neuron")
+    with st.expander(f"Firing events ({len(ev)})"):
+        st.dataframe(ev, hide_index=True, alt="One row per firing event")
+    with st.expander(f"Network bursts ({len(bu)})"):
+        st.dataframe(bu, hide_index=True, alt="One row per network burst")
+    with st.expander("Pairs of neurons: distance and correlation"):
+        st.dataframe(r["correlations"], hide_index=True, alt="Correlation between each pair of neurons")
+
+
+def show_neurites(r: dict):
+    s, ns = r["summary"], r["summary"].get("neurons", {})
+    L = "um" if ns.get("calibrated") else "px"
+    unit = "µm" if L == "um" else "px"
+    if not ns.get("calibrated"):
+        st.warning("The file has no pixel size, so lengths are in pixels. Set it under Microscope "
+                   "calibration and analyze again for microns.", title="Not calibrated")
+    if not s.get("time_known") and ns.get("frames", 0) > 1:
+        st.warning("The file has no time between frames, so growth rates are per frame-hour and not "
+                   "meaningful. Set it under Microscope calibration and analyze again.",
+                   title="Frame timing unknown")
+    with st.container(horizontal=True):
+        st.metric("Neurons", ns.get("neurons_found", 0), border=True)
+        st.metric(f"Neurite length per neuron ({unit})",
+                  f"{ns.get(f'mean_length_per_neuron_{L}_start', '–')} → {ns.get(f'mean_length_per_neuron_{L}_end', '–')}",
+                  border=True, help="Total length of all neurites per neuron, first frame → last frame.")
+        st.metric(f"Longest neurite ({unit})", ns.get(f"mean_longest_neurite_{L}", "–"), border=True,
+                  help="Average over neurons of the longest path from the cell body to a tip, in the last frame.")
+        st.metric("Branch points per neuron", ns.get("mean_branch_points", "–"), border=True)
+        g = ns.get(f"mean_growth_rate_{L}_per_h")
+        st.metric(f"Growth rate ({unit}/h)", g if g is not None else "–", border=True,
+                  help="How fast each neuron's total neurite length grows, averaged over neurons.")
+    if not ns.get("neurons_found"):
+        st.info("No neurons were found in this file.")
+        return
+    vid, pic = r["dir"] / "annotated.mp4", r["dir"] / "neurites.png"
+    left, right = st.columns([3, 2])
+    with left:
+        if vid.exists():
+            st.video(str(vid), alt="Time-lapse with traced neurites coloured by neuron")
+            st.caption("Neurites are coloured by the neuron they belong to; gray pieces aren't joined to "
+                       "any cell body. White circles are growth cones.")
+        elif pic.exists():
+            st.image(str(pic), caption="Last frame, with traced neurites coloured by neuron.")
+    with right:
+        if vid.exists() and pic.exists():
+            st.image(str(pic), caption="Last frame, with traced neurites coloured by neuron.")
+        st.markdown(f"**Growth cones:** {ns.get('growth_cones_followed', 0)} followed, "
+                    f"{ns.get('growth_cones_extending', 0)} extending, "
+                    f"{ns.get('growth_cones_retracting', 0)} pulling back. Average extension "
+                    f"**{ns.get(f'mean_cone_extension_{L}_per_h') or '–'} {unit}/h**.")
+        st.markdown(f"Primary neurites per neuron: **{ns.get('mean_primary_neurites', '–')}**, "
+                    f"tips per neuron: **{ns.get('mean_tips', '–')}**.")
+    nf, sh = r["neurite_frames"], r["sholl"]
+    timed = bool(s.get("time_known"))
+    xcol, xt = ("time_h", "Time (hours)") if timed else ("frame", "Frame")
+    a, b = st.columns(2)
+    if not nf.empty and nf["frame"].nunique() > 1:
+        with a:
+            st.markdown("**Neurite length over time**")
+            st.caption("One line per neuron. Hover to pick one out.")
+            st.altair_chart(per_neuron_chart(nf, xcol, f"total_length_{L}", xt, f"Total neurite length ({unit})"),
+                            width="stretch", alt="Total neurite length of each neuron over time")
+        with b:
+            st.markdown("**Longest neurite over time**")
+            st.caption("Path from the cell body to the farthest tip.")
+            st.altair_chart(per_neuron_chart(nf, xcol, f"longest_neurite_{L}", xt, f"Longest neurite ({unit})"),
+                            width="stretch", alt="Longest neurite of each neuron over time")
+    if not sh.empty:
+        with (b if nf.empty or nf["frame"].nunique() <= 1 else a):
+            st.markdown("**Sholl analysis (last frame)**")
+            st.caption("How many neurites cross a ring at each distance from the cell body. "
+                       "More crossings = more branched.")
+            dcol = f"distance_from_soma_edge_{L}"
+            mean = sh.groupby(dcol, as_index=False)["crossings"].mean()
+            st.altair_chart(line_chart(mean, dcol, {"crossings": "Average crossings"},
+                                       f"Distance from cell body ({unit})", "Crossings", [SERIES]),
+                            width="stretch", alt="Average Sholl crossings versus distance from the cell body")
+    st.subheader("Data")
+    with st.expander(f"Neurons ({len(r['neurons'])})", expanded=True):
+        st.dataframe(r["neurons"], hide_index=True, alt="One row per neuron")
+    with st.expander(f"Growth cones ({len(r['growth_cones'])})"):
+        st.dataframe(r["growth_cones"], hide_index=True, alt="One row per growth cone")
+    with st.expander("Every neuron, every frame"):
+        st.dataframe(nf, hide_index=True, alt="Neurite measures per neuron per frame")
+    with st.expander("Sholl analysis"):
+        st.dataframe(sh, hide_index=True, alt="Sholl crossings per neuron per ring")
+
+
 # ---------------------------------------------------------------- sidebar: settings
 with st.sidebar:
     st.header("Settings")
     subject = st.segmented_control(
-        "What are you filming?", ["Animals or people", "Cells (microscope)"],
+        "What are you filming?", ["Animals or people", "Cells (microscope)", "Neurons (microscope)"],
         default="Animals or people", required=True)
     cells_mode = subject.startswith("Cells")
+    neuron_mode = subject.startswith("Neurons")
 
-    if cells_mode:
+    if neuron_mode:
+        what = st.segmented_control(
+            "What should it measure?", ["Firing activity", "Neurite growth"], default="Firing activity",
+            required=True,
+            help="Firing activity: calcium or voltage imaging (GCaMP, Fluo-4, …). Finds each neuron and "
+                 "measures when it fires, how strongly, and which neurons fire together. "
+                 "Neurite growth: traces axons and dendrites and measures their length, branching "
+                 "and growth over a time-lapse.")
+        if what == "Firing activity":
+            find_by = st.segmented_control(
+                "Which neurons?", ["Ones that fire", "All visible"], default="Ones that fire", required=True,
+                help="Ones that fire: finds neurons by their flicker. All visible: finds bright cell "
+                     "bodies, so neurons that stay silent are counted too (needs a dye that shows "
+                     "resting neurons).")
+            strict = st.slider("Detection", -0.5, 0.5, 0.0, 0.05,
+                               help="Move left to find fainter neurons, right to ignore weak ones.")
+            st.caption("← finds fainter neurons · stricter →")
+            ev_sd = st.slider("Firing threshold (noise levels)", 2.0, 8.0, 3.5, 0.5,
+                              help="A firing event must rise this many times the neuron's own noise "
+                                   "above its resting level. Lower finds smaller events but more false ones.")
+            drift = st.toggle("Correct drift", True,
+                              help="Line every frame up with the start of the movie, in case the dish moved.")
+            with st.expander("Microscope calibration"):
+                st.caption("Leave at 0 to read these from the file.")
+                px = st.number_input("Pixel size (µm per pixel)", 0.0, 100.0, 0.0, 0.01, format="%.4f")
+                rate = st.number_input("Frame rate (frames per second)", 0.0, 10000.0, 0.0, 1.0)
+                diam = st.number_input("Typical neuron diameter (pixels, 0 = automatic)", 0.0, 500.0, 0.0, 1.0)
+                channel = st.number_input("Channel (for multi-channel files)", 0, 10, 0)
+            with st.expander("More options"):
+                neuropil = st.slider("Background haze to subtract", 0.0, 1.0, 0.7, 0.05,
+                                     help="Light from out-of-focus cells and processes (neuropil) leaks into "
+                                          "each neuron. This much of the haze around each neuron is subtracted. "
+                                          "0.7 is the usual choice.")
+                min_ev = st.number_input("Smallest event (ΔF/F)", 0.0, 5.0, 0.05, 0.01,
+                                         help="Ignore events smaller than this. Use 0 for voltage dyes, "
+                                              "whose signals are small.")
+                burst_frac = st.slider("Network burst: share of active neurons", 0.1, 0.9, 0.3, 0.05,
+                                       help="At least this share of the active neurons must start firing "
+                                            "together to count as a network burst.")
+                burst_win = st.number_input("Network burst: within this many seconds", 0.05, 5.0, 0.5, 0.05)
+                base_win = st.number_input("Resting level window (seconds)", 5.0, 600.0, 60.0, 5.0,
+                                           help="The resting level follows changes slower than this, such as "
+                                                "fading (bleaching).")
+                make_video = st.toggle("Make annotated video", True)
+            settings = neuron_settings(
+                neural_analysis="activity", find_neurons_by="activity" if find_by == "Ones that fire" else "brightness",
+                threshold_adjust=strict, event_threshold_sd=ev_sd, correct_drift=drift,
+                pixel_size_um=px, frame_interval_s=1 / rate if rate else 0.0, cell_diameter_px=diam,
+                channel=int(channel), neuropil_factor=neuropil, min_event_dff=min_ev,
+                burst_min_fraction=burst_frac, burst_window_s=burst_win, baseline_window_s=base_win,
+                annotate=make_video)
+        else:
+            look = st.segmented_control(
+                "How do the neurites look?", ["Bright", "Dark", "Auto"], default="Bright", required=True,
+                help="Bright: lighter than the background (fluorescent labels such as GFP, βIII-tubulin, MAP2). "
+                     "Dark: darker than the background (brightfield). Auto: anything that differs "
+                     "from the background, such as phase contrast.")
+            strict = st.slider("Detection", -0.5, 0.5, 0.0, 0.05,
+                               help="Move left to trace fainter neurites, right to ignore faint lines and noise.")
+            st.caption("← traces fainter neurites · stricter →")
+            width = st.number_input("Neurite thickness (pixels)", 1.0, 30.0, 3.0, 0.5,
+                                    help="Typical width of a neurite in the image.")
+            with st.expander("Microscope calibration"):
+                st.caption("Leave at 0 to read these from the file. Without them, results are in "
+                           "pixels and frames.")
+                px = st.number_input("Pixel size (µm per pixel)", 0.0, 100.0, 0.0, 0.01, format="%.4f")
+                dt_min = st.number_input("Time between frames (minutes)", 0.0, 1440.0, 0.0, 0.5)
+                diam = st.number_input("Cell body diameter (pixels, 0 = automatic)", 0.0, 500.0, 0.0, 1.0)
+                channel = st.number_input("Channel (for multi-channel files)", 0, 10, 0)
+            with st.expander("More options"):
+                step = st.number_input("Analyze every Nth frame", 1, 100, 1,
+                                       help="Higher is faster for long time-lapses.")
+                sholl = st.number_input("Sholl ring spacing (µm)", 1.0, 200.0, 10.0, 1.0,
+                                        help="Rings around each cell body for Sholl analysis (pixels if "
+                                             "the file has no pixel size).")
+                make_video = st.toggle("Make annotated video", True)
+            settings = neuron_settings(
+                neural_analysis="neurites", cell_appearance=look.lower(), threshold_adjust=strict,
+                neurite_width_px=width, pixel_size_um=px, frame_interval_s=dt_min * 60,
+                cell_diameter_px=diam, channel=int(channel), frame_step=int(step),
+                sholl_step_um=sholl, annotate=make_video)
+    elif cells_mode:
         look = st.segmented_control(
             "How do the cells look?", ["Auto", "Bright", "Dark"], default="Auto", required=True,
             help="Bright: cells are lighter than the background (fluorescence, stained nuclei). "
@@ -236,7 +520,10 @@ tab_add, tab_view, tab_search = st.tabs([":material/upload: Add videos", ":mater
                                          ":material/search: Find a behavior"])
 
 with tab_add:
-    if cells_mode:
+    if neuron_mode:
+        st.write("Drop in calcium-imaging movies or neuron time-lapses (TIFF stacks, .nd2, .czi) or "
+                 "videos, check the neuron settings on the left, then press **Analyze**.")
+    elif cells_mode:
         st.write("Drop in microscope time-lapses (TIFF stacks, .nd2, .czi) or videos, check the "
                  "cell settings on the left, then press **Analyze**.")
     else:
@@ -260,7 +547,20 @@ with tab_add:
                 st.error(str(e), title=f"Could not analyze {up.name}")
                 continue
             bar.progress(1.0, text="Done")
-            if summ["individuals_tracked"] == 0:
+            if neuron_mode:
+                ns = summ.get("neurons", {})
+                if not ns.get("neurons_found"):
+                    st.warning("Try moving the Detection slider left or setting the neuron diameter."
+                               if settings.neural_analysis == "activity" else
+                               "Try moving the Detection slider left, changing how the neurites look, "
+                               "or setting the cell body diameter.", title="No neurons were found")
+                elif settings.neural_analysis == "activity":
+                    st.success(f"{ns['neurons_found']} neurons, {ns.get('active_neurons', 0)} firing, "
+                               f"{ns.get('network_bursts', 0)} network bursts. Open the **Results** tab.",
+                               title="Done")
+                else:
+                    st.success(f"{ns['neurons_found']} neurons traced. Open the **Results** tab.", title="Done")
+            elif summ["individuals_tracked"] == 0:
                 st.warning("Try moving the Detection slider left, changing how the cells look, or "
                            "setting the cell diameter." if cells_mode else
                            "Try raising motion sensitivity or lowering the smallest object size, "
@@ -288,7 +588,9 @@ with tab_view:
         is_cells = s.get("mode") == "cells"
         vid = r["dir"] / "annotated.mp4"
 
-        if is_cells:
+        if s.get("mode") == "neurons":
+            (show_activity if s.get("neural_analysis") == "activity" else show_neurites)(r)
+        elif is_cells:
             cs = s.get("cells", {})
             L = "um" if cs.get("calibrated") else "px"
             unit = "µm" if L == "um" else "px"
@@ -427,12 +729,12 @@ with tab_search:
     if not names:
         st.info("No results yet. Add a video in the first tab.")
     else:
-        opts = list(BEHAVIOR_INFO)[:4] + ["interaction", "division"]
+        opts = list(BEHAVIOR_INFO)[:4] + ["interaction", "division", "network_burst"]
         names_map = {"interaction": "Two individuals interacting / cells touching",
-                     "division": "Cell division"}
+                     "division": "Cell division", "network_burst": "Network burst (neurons firing together)"}
         with st.container(horizontal=True, vertical_alignment="bottom"):
             beh = st.selectbox("Behavior", opts, format_func=lambda b: names_map.get(b, label(b)))
-            min_s = st.number_input("At least this many seconds", 0.0, value=0.0 if beh == "division" else 1.0,
+            min_s = st.number_input("At least this many seconds", 0.0, value=0.0 if beh in ("division", "network_burst") else 1.0,
                                     step=0.5, disabled=beh == "division")
         rows = []
         for n in names:
@@ -447,6 +749,12 @@ with tab_search:
                     rows.append({"video": n, "parent_id": p, "daughters": ", ".join(map(str, g["daughter_id"])),
                                  "start_frame": max(0, f0 - 4), "end_frame": f0 + 4,
                                  "when": time_label(r["summary"], f0 / fps)})
+                continue
+            if beh == "network_burst":
+                for rec in r["bursts"].to_dict("records"):
+                    if rec["duration_s"] >= min_s:
+                        rows.append({"video": n, "when": time_label(r["summary"], rec["start_s"]),
+                                     "lasts": time_label(r["summary"], rec["duration_s"]), **rec})
                 continue
             df = r["interactions"] if beh == "interaction" else r["behaviors"]
             if df.empty:
@@ -464,6 +772,8 @@ with tab_search:
         if len(m):
             if beh == "division":
                 show = ["video", "when", "parent_id", "daughters"]
+            elif beh == "network_burst":
+                show = ["video", "when", "lasts", "neurons", "fraction_of_active", "mean_amplitude_dff"]
             elif beh == "interaction":
                 show = ["video", "when", "lasts", "id_a", "id_b", "min_dist_bl", "alignment",
                         "approached_by", "leader"]
