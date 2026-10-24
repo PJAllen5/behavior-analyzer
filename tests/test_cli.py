@@ -45,6 +45,7 @@ def test_app_command_starts_streamlit_with_the_packaged_app(monkeypatch):
     assert Path(argv[2]) == Path(cli.__file__).with_name("app.py")
     assert argv[argv.index("--server.port") + 1] == "8555"
     assert argv[argv.index("--server.headless") + 1] == "true"
+    assert argv[argv.index("--server.address") + 1] == "localhost"  # not reachable from the network
 
 
 @pytest.mark.slow
