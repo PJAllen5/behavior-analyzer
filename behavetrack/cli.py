@@ -194,6 +194,8 @@ def cmd_app(a):
 
     sys.argv = ["streamlit", "run", str(Path(__file__).with_name("app.py")),
                 "--server.maxUploadSize", "4096", "--browser.gatherUsageStats", "false",
+                # only this computer can open the app (not other devices on the network)
+                "--server.address", "localhost",
                 "--server.headless", "true" if a.no_browser else "false"]
     if a.port:
         sys.argv += ["--server.port", str(a.port)]
