@@ -2,8 +2,9 @@
 
 Track animals, people, or cells in a video or microscope time-lapse, label what the
 group is doing, and export data files describing movement, interactions and (for
-cells) division. It can also search your videos for a behavior and cut out the
-matching clips.
+cells) division. For neurons it measures firing activity in calcium imaging and
+neurite (axon and dendrite) growth. It can also search your videos for a behavior and
+cut out the matching clips.
 
 ## Getting started
 
@@ -21,11 +22,11 @@ Double-click **`Start Behavior Tracker.command`**. It opens in your web browser
 (it runs only on your computer; nothing is uploaded to the internet). The first
 launch on a new Mac sets itself up, which takes a few minutes.
 
-1. **Add videos**: choose **Animals or people** or **Cells (microscope)** at the top left,
+1. **Add videos**: choose **Animals or people**, **Cells (microscope)** or **Neurons (microscope)** at the top left,
    drag videos or microscope files onto the page, check the settings, press **Analyze**.
 2. **Results**: the annotated video, time spent in each behavior, charts over time,
    the data tables, and a button to download every data file as a .zip.
-3. **Find a behavior**: pick a behavior (or cell division) to list every time it happens
+3. **Find a behavior**: pick a behavior (or cell division, or a network burst) to list every time it happens
    across all your videos. Click a row to play that moment, and cut it into its own clip.
 
 Everything is saved in `app_data/` (`uploads/` for your videos, `results/` for the data).
@@ -78,6 +79,105 @@ divisions identified correctly. Check it yourself with `tools/check_cells.py`.
 or overlapping cells (confluent sheets) are hard to separate; this is not a replacement for
 specialised segmentation tools such as Cellpose on difficult images.
 
+## Neurons mode
+
+For neurons, in two kinds of recording. Pick one under *What should it measure?*.
+It reads the same files as cells mode, and calibration works the same way.
+
+### Firing activity (calcium imaging)
+
+For calcium-imaging (GCaMP, Fluo-4, …) or voltage-imaging movies of neurons in culture,
+slices or other flat preparations.
+
+**What it does:** lines every frame up with the start of the movie (stage drift), finds each
+neuron, measures its brightness in every frame minus the haze around it (neuropil), turns that
+into ΔF/F (change relative to the neuron's resting level, which follows slow fading), and
+finds firing events and network bursts.
+
+**Settings:**
+- *Which neurons?* **Ones that fire** finds neurons by their flicker (pixels that brighten
+  together). **All visible** finds bright cell bodies, so neurons that never fire are counted
+  too; this needs a dye that shows resting neurons.
+- *Detection*: move left to find fainter neurons.
+- *Firing threshold*: an event must rise this many times the neuron's own noise above rest (default 3.5).
+- *Correct drift*: on by default.
+- *More options*: share of background haze to subtract (0.7), smallest event (0.05 ΔF/F; use 0
+  for voltage dyes), what counts as a network burst (30% of firing neurons starting within 0.5 s),
+  and how slowly the resting level may change (60 s).
+
+**Files it writes:**
+
+| File | One row per… | What's in it |
+|---|---|---|
+| `neurons.csv` | neuron | position, area, resting brightness, noise, events, events per minute, mean and largest ΔF/F, half-width, interval between events and its regularity (CV), bursts joined |
+| `events.csv` | firing event | neuron, onset, peak, rise time, duration, half-width, size (ΔF/F), signal-to-noise, in a burst or not |
+| `bursts.csv` | network burst | start, peak, duration, neurons taking part, share of firing neurons, mean size |
+| `traces_dff.csv` | frame | ΔF/F of every neuron (one column each) |
+| `traces_raw.csv` | frame | raw brightness and neuropil of every neuron |
+| `correlations.csv` | pair of neurons | distance apart and how alike their activity is |
+| `frames.csv` | frame | neurons firing, share firing, mean ΔF/F, in a burst or not |
+| `rois.png` | | map of the neurons with their ID numbers |
+
+`summary.json` gains: neurons found and firing, events per minute, median event size and
+half-width, network bursts (count, per minute, gap between them and its regularity, neurons per
+burst), share of events inside bursts, synchrony (mean correlation between firing neurons) and
+the largest drift corrected.
+
+**Accuracy on the built-in test** (`tools/make_test_neurons.py`: 40 neurons, 10 of them silent,
+90 s at 20 frames/s, with neuropil, bleaching, drift and noise): all 30 firing neurons found with
+no false ones (all 40 with *All visible*), 99% of firing events found with 0.4% false, 8 of 8
+network bursts found. Check it yourself with `tools/check_neurons.py`.
+
+**Limits:** drift correction handles sliding, not warping or z-movement, so very wobbly
+recordings (e.g. awake animals) need motion correction first. Events closer together than about
+0.2 s merge into one. Densely packed or overlapping neurons can be merged. ΔF/F is relative to
+raw brightness, so a large camera offset makes it smaller. For large in-vivo datasets use a
+specialised tool such as Suite2p or CaImAn.
+
+### Neurite growth
+
+For fluorescent (GFP, βIII-tubulin, MAP2, …), brightfield or phase-contrast images of neurons in
+culture: a single image or a time-lapse.
+
+**What it does:** finds cell bodies, traces neurites as thin lines, gives each neurite to the
+cell body it connects to, and measures length, branching and tips. Across a time-lapse each
+neuron keeps its ID, and growth cones are followed to see whether they extend or pull back.
+
+**Settings:**
+- *How do the neurites look?* **Bright** (fluorescence), **Dark** (brightfield) or **Auto** (phase contrast).
+- *Detection*: move left to trace fainter neurites.
+- *Neurite thickness*: typical width in pixels (default 3).
+- *Calibration*: pixel size, time between frames, cell body diameter (automatic by default), channel.
+- *More options*: analyze every Nth frame, Sholl ring spacing (10 µm).
+
+**Files it writes:**
+
+| File | One row per… | What's in it |
+|---|---|---|
+| `neurons.csv` | neuron | position, cell body area, final total neurite length, longest neurite, primary neurites, branch points, tips, growth rate (total and longest), mean growth-cone extension rate, Sholl peak |
+| `neurite_frames.csv` | neuron per frame | total length, longest neurite, primary neurites, branch points, tips |
+| `growth_cones.csv` | growth cone | neuron, how long it was followed, net extension, extension rate, share of time extending or pulling back, behavior (extending / retracting / paused) |
+| `growth_cone_tracks.csv` | growth cone per frame | position and distance from the cell body along the neurite |
+| `sholl.csv` | neuron per ring | neurite crossings at each distance from the cell body (last frame) |
+| `frames.csv` | frame | neurons, total length, tips, branch points, length not joined to a cell body |
+| `neurites.png` | | the last frame with traced neurites coloured by neuron |
+
+**What the measures mean:**
+- *Longest neurite*: the path along the neurite from the cell body to the farthest tip.
+- *Primary neurites*: neurites leaving the cell body. *Tips* are growth cones.
+- *Sholl analysis*: how many neurites cross rings drawn around the cell body. More crossings
+  farther out means a larger, more branched arbor.
+
+**Accuracy on the built-in test** (`tools/make_test_neurites.py`: 8 neurons, 25 frames over 4 h,
+growing, branching and retracting neurites, debris and uneven lighting): 8 of 8 cell bodies found,
+total length within 1% overall (median 2.8% per neuron), longest neurite within 3.3%, primary
+neurites exact, growth rate 44.7 vs 44.3 µm/h. Check it yourself with `tools/check_neurites.py`.
+
+**Limits:** where neurites from different neurons cross or touch, the shared stretch is split
+between them and counts as a branch point; branches shorter than about 3 µm aren't counted yet;
+neurites that leave the image are measured only up to the edge. Dense networks (mature cultures)
+are hard to assign to single neurons; very sparse labelling works best.
+
 ## Using the command line
 
 One-time setup (the app launcher does this for you):
@@ -112,6 +212,15 @@ Results go to `my_video_behavior/`:
 .venv/bin/python -m behavetrack analyze movie.mp4 --mode cells --pixel-size 0.65 --frame-interval 300
 ```
 
+### Analyze neurons
+
+```bash
+.venv/bin/python -m behavetrack analyze gcamp.tif --mode neurons
+.venv/bin/python -m behavetrack analyze gcamp.tif --mode neurons --find-by brightness --frame-interval 0.05
+.venv/bin/python -m behavetrack analyze outgrowth.nd2 --mode neurons --analysis neurites --channel 1
+.venv/bin/python -m behavetrack filter recordings/ --mode neurons --behavior network_burst --clips
+```
+
 Run `.venv/bin/python -m behavetrack analyze --help` for every option.
 
 ### Search many videos for a behavior
@@ -120,7 +229,8 @@ Run `.venv/bin/python -m behavetrack analyze --help` for every option.
 .venv/bin/python -m behavetrack filter my_videos/ --behavior collective_motion --min-seconds 2 --clips
 ```
 
-Behaviors: `collective_motion`, `milling`, `disordered`, `resting`, `interaction`.
+Behaviors: `collective_motion`, `milling`, `disordered`, `resting`, `interaction`, and
+`network_burst` for neuron recordings.
 Writes `behavior_results/matches_<behavior>.csv` and, with `--clips`, one video per match.
 Videos already analyzed are reused; add `--rerun` to redo them.
 
@@ -150,3 +260,5 @@ settings work for ants, birds and people.
 - Long or 4K video: `--start 60 --max-seconds 30`, or `--resize-width 640` for speed
 - Test video with known behaviors: `.venv/bin/python tools/make_test_video.py samples/test_flock.mp4`
 - Test cell time-lapse with an answer key: `.venv/bin/python tools/make_test_cells.py samples/test_cells`
+- Test calcium-imaging movie with an answer key: `.venv/bin/python tools/make_test_neurons.py samples/test_neurons`
+- Test neurite time-lapse with an answer key: `.venv/bin/python tools/make_test_neurites.py samples/test_neurites`

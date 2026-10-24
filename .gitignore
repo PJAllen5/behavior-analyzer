@@ -9,7 +9,7 @@ results/
 *_behavior/
 behavior_results/
 
-# Test media (regenerate with tools/make_test_video.py and tools/make_test_cells.py)
+# Test media (regenerate with the tools/make_test_*.py scripts)
 samples/
 
 # AI model downloaded on first use of the AI detector

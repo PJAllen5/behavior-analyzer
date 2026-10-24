@@ -20,7 +20,7 @@ from .track import Tracker
 
 @dataclass
 class Settings:
-    mode: str = "animals"               # "animals" (animals / people) or "cells" (microscope)
+    mode: str = "animals"               # "animals" (animals / people), "cells" or "neurons" (microscope)
     detector: str = "motion"            # animals mode: "motion" or "yolo"
     classes: list[str] = field(default_factory=list)  # yolo only, e.g. ["person", "bird"]
     yolo_model: str = "yolo11n.pt"
@@ -47,11 +47,32 @@ class Settings:
     split_touching: bool = True
     detect_divisions: bool = True
     moving_bl_per_frame: float = 0.05   # cells: slower than this per frame counts as still
+    # --- neurons mode (also uses the calibration, channel, cell_appearance,
+    #     cell_diameter_px and threshold_adjust settings above)
+    neural_analysis: str = "activity"   # "activity" (calcium imaging) or "neurites" (growth)
+    find_neurons_by: str = "activity"   # activity: "activity" (flicker) or "brightness" (also silent ones)
+    correct_drift: bool = True          # activity: line every frame up with the first
+    neuropil_factor: float = 0.7        # activity: share of the surrounding haze to subtract
+    baseline_window_s: float = 60.0     # activity: resting level follows changes slower than this
+    event_threshold_sd: float = 3.5     # activity: firing = rise this many noise levels above rest
+    min_event_dff: float = 0.05         # activity: smallest event (ΔF/F); 0 for small voltage signals
+    burst_window_s: float = 0.5         # activity: neurons starting this close together are in step
+    burst_min_fraction: float = 0.3     # activity: share of active neurons needed for a burst
+    neurite_width_px: float = 3.0       # neurites: typical neurite thickness
+    frame_step: int = 1                 # neurites: analyze every Nth frame
+    sholl_step_um: float = 10.0         # neurites: ring spacing for Sholl analysis (pixels if uncalibrated)
 
 
 def cell_settings(**kw) -> Settings:
     """Defaults that suit microscope time-lapses."""
     base = dict(mode="cells", resize_width=0, max_missed=2, min_track_frames=3, contact_bl=1.5)
+    base.update(kw)
+    return Settings(**base)
+
+
+def neuron_settings(**kw) -> Settings:
+    """Defaults that suit neuron imaging (calcium activity or neurite growth)."""
+    base = dict(mode="neurons", resize_width=0, cell_appearance="bright")
     base.update(kw)
     return Settings(**base)
 
@@ -105,6 +126,9 @@ def run(video: str | Path, out_dir: str | Path, s: Settings,
     first = int(s.start_s * fps)
     last = total if not s.max_seconds else min(total, first + int(s.max_seconds * fps))
     scale = s.resize_width / W if s.resize_width and W > s.resize_width else 1.0
+    if s.mode == "neurons":
+        return _run_neurons(video, out_dir, s, src, fps, first, last, scale, pixel_size,
+                            time_known, progress)
 
     if cells:
         det = CellDetector(s.cell_appearance, s.cell_diameter_px * scale, s.threshold_adjust,
@@ -202,6 +226,36 @@ def run(video: str | Path, out_dir: str | Path, s: Settings,
     if s.annotate and not tracks.empty:
         render(src, out_dir / "annotated.mp4", tracks, frames, fps, first, f,
                lineage=trk.lineage if cells else None, progress=progress)
+    return summary
+
+
+def _run_neurons(video: Path, out_dir: Path, s: Settings, src, fps: float, first: int, last: int,
+                 scale: float, pixel_size: float | None, time_known: bool,
+                 progress: ProgressFn | None) -> dict:
+    from . import activity, neurites
+
+    kind = s.neural_analysis
+    print(f"Analyzing {video.name}: {src.width}x{src.height}, {src.n_frames} frames, "
+          f"mode=neurons ({kind})", file=sys.stderr)
+    mod = activity if kind == "activity" else neurites
+    info, draw = mod.run(src, out_dir, s, fps, first, last, scale, pixel_size, progress)
+    found = info.get("neurons_found", 0)
+    if not found:
+        print("No neurons were found. Try moving the detection setting toward 'fainter', "
+              "or set the cell diameter.", file=sys.stderr)
+    n_frames = info.get("frames", last - first)
+    summary = {
+        "video": str(video), "mode": "neurons", "neural_analysis": kind, "fps": fps,
+        "width": src.width, "height": src.height,
+        "analyzed_seconds": round((last - first) / fps, 2), "start_s": s.start_s,
+        "frames_analyzed": n_frames, "pixel_size_um": pixel_size, "time_known": time_known,
+        "individuals_tracked": found, "typical_visible": found,
+        "neurons": info, "settings": asdict(s),
+    }
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
+    if s.annotate and draw:
+        mod.render(src, out_dir / "annotated.mp4", draw, playback_fps(fps), first, last,
+                   _video_writer, progress)
     return summary
 
 
