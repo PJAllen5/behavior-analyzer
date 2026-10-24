@@ -1,119 +1,136 @@
 """Command line:
 
-  python -m behavetrack analyze VIDEO [options]
-  python -m behavetrack filter VIDEO_OR_FOLDER... --behavior collective_motion [--clips]
-  python -m behavetrack analyze MOVIE.tif --mode neurons --analysis activity|neurites
+  behavetrack app                                   open the browser app
+  behavetrack analyze VIDEO [options]
+  behavetrack filter VIDEO_OR_FOLDER... --behavior collective_motion [--clips]
+  behavetrack analyze MOVIE.tif --mode neurons --analysis activity|neurites
+
+(`python -m behavetrack ...` works the same if the command isn't installed.)
 """
 from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import pandas as pd
 
 from .analyze import COLLECTIVE, DISORDERED, MILLING, RESTING
-from .pipeline import Settings, cell_settings, extract_clip, neuron_settings, run
+from .pipeline import extract_clip, run
+from .settings import MODES, NEURAL_ANALYSES, Settings, defaults, with_changes
 from .sources import ALL_EXT as VIDEO_EXT
 BEHAVIORS = [COLLECTIVE, MILLING, DISORDERED, RESTING, "interaction", "network_burst"]
 
 
+# Defaults are never written here: they come from settings.py, per mode, so the command
+# line and the app always agree. Options left out stay None and keep the mode's default.
+_A, _C = defaults("animals"), defaults("cells")
+_NA, _NN = defaults("neurons", "activity"), defaults("neurons", "neurites")
+
+# command-line option -> Settings field
+_OPTION_FIELDS = {
+    "pixel_size": "pixel_size_um", "frame_interval": "frame_interval_s", "channel": "channel",
+    "cells_look": "cell_appearance", "cell_diameter": "cell_diameter_px",
+    "threshold_adjust": "threshold_adjust", "analysis": "neural_analysis",
+    "find_by": "find_neurons_by", "neuropil": "neuropil_factor", "event_sd": "event_threshold_sd",
+    "min_event": "min_event_dff", "baseline_window": "baseline_window_s",
+    "burst_window": "burst_window_s", "burst_fraction": "burst_min_fraction",
+    "neurite_width": "neurite_width_px", "frame_step": "frame_step", "sholl_step": "sholl_step_um",
+    "detector": "detector", "yolo_model": "yolo_model", "conf": "conf", "min_area": "min_area",
+    "max_area": "max_area", "sensitivity": "sensitivity", "resize_width": "resize_width",
+    "start": "start_s", "max_seconds": "max_seconds", "contact_bl": "contact_bl",
+    "moving_bl_s": "moving_bl_s", "min_behavior_seconds": "min_behavior_seconds",
+}
+# on/off switches: option -> (Settings field, value when the switch is given)
+_SWITCHES = {"no_split": ("split_touching", False), "no_divisions": ("detect_divisions", False),
+             "no_drift": ("correct_drift", False), "no_video": ("annotate", False)}
+
+
 def _add_common(p: argparse.ArgumentParser):
-    p.add_argument("--mode", choices=["animals", "cells", "neurons"], default="animals",
+    p.add_argument("--mode", choices=list(MODES), default="animals",
                    help="animals: animals/people in video (default). cells: microscope time-lapse. "
                         "neurons: calcium imaging or neurite growth")
     g = p.add_argument_group("cells and neurons modes")
-    g.add_argument("--pixel-size", type=float, default=0.0,
+    g.add_argument("--pixel-size", type=float,
                    help="microns per pixel (default: read from the file, else results in pixels)")
-    g.add_argument("--frame-interval", type=float, default=0.0,
+    g.add_argument("--frame-interval", type=float,
                    help="seconds between frames (default: read from the file)")
-    g.add_argument("--channel", type=int, default=0, help="channel to analyze (0 = first)")
-    g.add_argument("--cells-look", choices=["auto", "bright", "dark"], default=None,
+    g.add_argument("--channel", type=int, help=f"channel to analyze (default {_C.channel} = first)")
+    g.add_argument("--cells-look", choices=["auto", "bright", "dark"],
                    help="bright: fluorescent cells/nuclei; dark: darker than background; "
                         "auto: anything different from the background (e.g. phase contrast). "
-                        "Default: auto in cells mode, bright in neurons mode")
-    g.add_argument("--cell-diameter", type=float, default=0.0,
+                        f"Default: {_C.cell_appearance} in cells mode, {_NA.cell_appearance} in neurons mode")
+    g.add_argument("--cell-diameter", type=float,
                    help="typical cell diameter in pixels (default: automatic)")
-    g.add_argument("--threshold-adjust", type=float, default=0.0,
-                   help="-0.5..0.5: negative finds fainter cells, positive is stricter")
+    g.add_argument("--threshold-adjust", type=float,
+                   help=f"-0.5..0.5: negative finds fainter cells, positive is stricter (default {_C.threshold_adjust})")
     g.add_argument("--no-split", action="store_true", help="don't separate touching cells")
     g.add_argument("--no-divisions", action="store_true", help="don't look for cell division")
     g = p.add_argument_group("neurons mode (--cells-look, --cell-diameter and --threshold-adjust "
                              "also apply; cell diameter means the cell body)")
-    g.add_argument("--analysis", choices=["activity", "neurites"], default="activity",
-                   help="activity: firing in calcium/voltage imaging (default). "
+    g.add_argument("--analysis", choices=list(NEURAL_ANALYSES),
+                   help=f"activity: firing in calcium/voltage imaging (default {_NA.neural_analysis}). "
                         "neurites: axon and dendrite growth")
-    g.add_argument("--find-by", choices=["activity", "brightness"], default="activity",
-                   help="activity: find neurons that flicker (default). brightness: find bright cell "
-                        "bodies, which also counts neurons that never fire")
+    g.add_argument("--find-by", choices=["activity", "brightness"],
+                   help=f"activity: find neurons that flicker. brightness: find bright cell bodies, "
+                        f"which also counts neurons that never fire (default {_NA.find_neurons_by})")
     g.add_argument("--no-drift", action="store_true", help="activity: don't correct stage drift")
-    g.add_argument("--neuropil", type=float, default=0.7,
-                   help="activity: share of the surrounding haze to subtract (0 = none, default 0.7)")
-    g.add_argument("--event-sd", type=float, default=3.5,
-                   help="activity: an event must rise this many noise levels above rest (default 3.5)")
-    g.add_argument("--min-event", type=float, default=0.05,
-                   help="activity: smallest event in ΔF/F (default 0.05; use 0 for voltage dyes)")
-    g.add_argument("--baseline-window", type=float, default=60.0,
-                   help="activity: seconds over which the resting level is estimated (default 60)")
-    g.add_argument("--burst-window", type=float, default=0.5,
-                   help="activity: neurons starting within this many seconds fire together (default 0.5)")
-    g.add_argument("--burst-fraction", type=float, default=0.3,
-                   help="activity: share of active neurons needed for a network burst (default 0.3)")
-    g.add_argument("--neurite-width", type=float, default=3.0,
-                   help="neurites: typical neurite thickness in pixels (default 3)")
-    g.add_argument("--frame-step", type=int, default=1, help="neurites: analyze every Nth frame")
-    g.add_argument("--sholl-step", type=float, default=10.0,
-                   help="neurites: spacing of Sholl rings in µm (pixels if uncalibrated; default 10)")
+    g.add_argument("--neuropil", type=float,
+                   help=f"activity: share of the surrounding haze to subtract (0 = none, default {_NA.neuropil_factor})")
+    g.add_argument("--event-sd", type=float,
+                   help=f"activity: an event must rise this many noise levels above rest (default {_NA.event_threshold_sd})")
+    g.add_argument("--min-event", type=float,
+                   help=f"activity: smallest event in ΔF/F (default {_NA.min_event_dff}; use 0 for voltage dyes)")
+    g.add_argument("--baseline-window", type=float,
+                   help=f"activity: seconds over which the resting level is estimated (default {_NA.baseline_window_s:g})")
+    g.add_argument("--burst-window", type=float,
+                   help=f"activity: neurons starting within this many seconds fire together (default {_NA.burst_window_s})")
+    g.add_argument("--burst-fraction", type=float,
+                   help=f"activity: share of active neurons needed for a network burst (default {_NA.burst_min_fraction})")
+    g.add_argument("--neurite-width", type=float,
+                   help=f"neurites: typical neurite thickness in pixels (default {_NN.neurite_width_px:g})")
+    g.add_argument("--frame-step", type=int, help=f"neurites: analyze every Nth frame (default {_NN.frame_step})")
+    g.add_argument("--sholl-step", type=float,
+                   help=f"neurites: spacing of Sholl rings in µm (pixels if uncalibrated; default {_NN.sholl_step_um:g})")
     g = p.add_argument_group("detection (animals mode)")
-    g.add_argument("--detector", choices=["motion", "yolo"], default="motion",
-                   help="motion: anything moving on a still camera (default). "
-                        "yolo: AI model for people/birds/animals")
+    g.add_argument("--detector", choices=["motion", "yolo"],
+                   help=f"motion: anything moving on a still camera. yolo: AI model for "
+                        f"people/birds/animals (default {_A.detector})")
     g.add_argument("--classes", default="",
                    help="yolo only, comma list, e.g. 'person' or 'bird,dog'")
-    g.add_argument("--yolo-model", default="yolo11n.pt")
-    g.add_argument("--conf", type=float, default=0.3, help="yolo confidence cut-off")
-    g.add_argument("--min-area", type=int, default=15, help="motion: smallest blob in pixels")
-    g.add_argument("--max-area", type=int, default=50_000, help="motion: largest blob in pixels")
-    g.add_argument("--sensitivity", type=float, default=25.0,
-                   help="motion: lower picks up fainter movement (default 25)")
-    g.add_argument("--resize-width", type=int, default=960,
-                   help="process at this width for speed (0 = full size)")
+    g.add_argument("--yolo-model", help=f"default {_A.yolo_model}")
+    g.add_argument("--conf", type=float, help=f"yolo confidence cut-off (default {_A.conf})")
+    g.add_argument("--min-area", type=int, help=f"motion: smallest blob in pixels (default {_A.min_area})")
+    g.add_argument("--max-area", type=int, help=f"motion: largest blob in pixels (default {_A.max_area})")
+    g.add_argument("--sensitivity", type=float,
+                   help=f"motion: lower picks up fainter movement (default {_A.sensitivity:g})")
+    g.add_argument("--resize-width", type=int,
+                   help=f"process at this width for speed (0 = full size; default {_A.resize_width}, "
+                        f"{_C.resize_width} for microscope modes)")
     g = p.add_argument_group("time range")
-    g.add_argument("--start", type=float, default=0.0, help="start at this second")
-    g.add_argument("--max-seconds", type=float, default=0.0, help="only analyze this long")
+    g.add_argument("--start", type=float, help="start at this second")
+    g.add_argument("--max-seconds", type=float, help="only analyze this long (default: all)")
     g = p.add_argument_group("behavior")
-    g.add_argument("--contact-bl", type=float, default=2.0,
-                   help="interaction distance in body lengths (default 2)")
-    g.add_argument("--moving-bl-s", type=float, default=0.5,
-                   help="speed (body lengths/s) below which an object counts as still")
-    g.add_argument("--min-behavior-seconds", type=float, default=1.0)
+    g.add_argument("--contact-bl", type=float,
+                   help=f"interaction distance in body lengths (default {_A.contact_bl:g}; "
+                        f"{_C.contact_bl:g} cell diameters in cells mode)")
+    g.add_argument("--moving-bl-s", type=float,
+                   help=f"speed (body lengths/s) below which an object counts as still (default {_A.moving_bl_s})")
+    g.add_argument("--min-behavior-seconds", type=float, help=f"default {_A.min_behavior_seconds:g}")
     p.add_argument("--no-video", action="store_true", help="skip the annotated video")
 
 
 def _settings(a) -> Settings:
-    if a.mode == "neurons":
-        return neuron_settings(
-            neural_analysis=a.analysis, pixel_size_um=a.pixel_size, frame_interval_s=a.frame_interval,
-            channel=a.channel, cell_appearance=a.cells_look or "bright", cell_diameter_px=a.cell_diameter, threshold_adjust=a.threshold_adjust,
-            find_neurons_by=a.find_by, correct_drift=not a.no_drift, neuropil_factor=a.neuropil,
-            event_threshold_sd=a.event_sd, min_event_dff=a.min_event,
-            baseline_window_s=a.baseline_window, burst_window_s=a.burst_window,
-            burst_min_fraction=a.burst_fraction, neurite_width_px=a.neurite_width,
-            frame_step=a.frame_step, sholl_step_um=a.sholl_step, start_s=a.start,
-            max_seconds=a.max_seconds, annotate=not a.no_video)
-    if a.mode == "cells":
-        return cell_settings(
-            pixel_size_um=a.pixel_size, frame_interval_s=a.frame_interval, channel=a.channel,
-            cell_appearance=a.cells_look or "auto", cell_diameter_px=a.cell_diameter,
-            threshold_adjust=a.threshold_adjust, split_touching=not a.no_split,
-            detect_divisions=not a.no_divisions, start_s=a.start, max_seconds=a.max_seconds,
-            annotate=not a.no_video)
-    return Settings(
-        detector=a.detector, classes=[c for c in a.classes.split(",") if c],
-        yolo_model=a.yolo_model, conf=a.conf, min_area=a.min_area, max_area=a.max_area,
-        sensitivity=a.sensitivity, resize_width=a.resize_width, start_s=a.start,
-        max_seconds=a.max_seconds, contact_bl=a.contact_bl, moving_bl_s=a.moving_bl_s,
-        min_behavior_seconds=a.min_behavior_seconds, annotate=not a.no_video)
+    """Settings for the chosen mode, with only the options the user actually typed changed."""
+    changes = {field: getattr(a, opt) for opt, field in _OPTION_FIELDS.items()}
+    for opt, (field, value) in _SWITCHES.items():
+        if getattr(a, opt):
+            changes[field] = value
+    if a.classes:
+        changes["classes"] = [c.strip() for c in a.classes.split(",") if c.strip()]
+    base = defaults(a.mode, a.analysis if a.mode == "neurons" else None)
+    return with_changes(base, **changes)
 
 
 def _videos(paths: list[str]) -> list[Path]:
@@ -172,10 +189,31 @@ def cmd_filter(a):
         print(f"Clips: {root / 'clips'}/")
 
 
+def cmd_app(a):
+    from streamlit.web import cli as stcli
+
+    sys.argv = ["streamlit", "run", str(Path(__file__).with_name("app.py")),
+                "--server.maxUploadSize", "4096", "--browser.gatherUsageStats", "false",
+                "--server.headless", "true" if a.no_browser else "false"]
+    if a.port:
+        sys.argv += ["--server.port", str(a.port)]
+    sys.exit(stcli.main())
+
+
+def app_main():
+    """Entry point for the `behavetrack-app` command."""
+    main(["app", *sys.argv[1:]])
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="behavetrack",
-                                description="Track animals/people in video and export behavior data.")
+                                description="Track animals, people, cells and neurons in video and export behavior data.")
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    pp = sub.add_parser("app", help="open the browser app")
+    pp.add_argument("--port", type=int, help="port to serve on (default 8501)")
+    pp.add_argument("--no-browser", action="store_true", help="don't open a browser window")
+    pp.set_defaults(func=cmd_app)
 
     pa = sub.add_parser("analyze", help="analyze one video and write data files")
     pa.add_argument("video")

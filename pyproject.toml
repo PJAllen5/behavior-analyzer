@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "behavetrack"
+version = "0.2.0"
+description = "Track animals, people, cells and neurons in video and microscope files; export behavior data."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dependencies = [
+    "opencv-python-headless>=4.9",
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "pandas>=2.1",
+    "streamlit>=1.40",
+    "altair>=5",
+    # microscope modes: image analysis and microscope file formats
+    "scikit-image>=0.22",
+    "tifffile>=2024.1",
+    "imagecodecs>=2024.1",
+    "nd2>=0.10",
+    "czifile>=2019.7",
+]
+
+[project.optional-dependencies]
+ai = ["ultralytics>=8.3"]   # the "Animals or people (AI)" detector / --detector yolo
+dev = ["pytest>=8", "watchdog>=4"]   # tests, and faster app reloads while editing
+
+[project.scripts]
+behavetrack = "behavetrack.cli:main"
+behavetrack-app = "behavetrack.cli:app_main"
+
+[tool.setuptools]
+packages = ["behavetrack"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: analyzes generated test movies and checks accuracy (about 2 minutes in total)"]

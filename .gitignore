@@ -1,5 +1,7 @@
-# Installed libraries (rebuilt by the launcher / pip install -r requirements.txt)
+# Installed libraries (rebuilt by the launcher / pip install -e ".[ai,dev]")
+.venv
 .venv/
+*.nosync/
 __pycache__/
 *.pyc
 
@@ -19,3 +21,9 @@ samples/
 .claude/
 .agents/
 .DS_Store
+
+# Python packaging and test caches
+*.egg-info/
+build/
+.pytest_cache/
+tests/.data/

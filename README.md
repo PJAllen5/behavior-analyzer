@@ -13,8 +13,7 @@ isn't installed). Download this project (green **Code** button → **Download ZI
 or `git clone`), then double-click **`Start Behavior Tracker.command`**. The first launch
 installs what it needs, which takes a few minutes.
 
-On Windows or Linux, run the command-line setup below, then
-`.venv/bin/python -m streamlit run app.py` (on Windows: `.venv\Scripts\python -m streamlit run app.py`).
+On Windows or Linux, do the command-line setup below, then run `behavetrack app`.
 
 ## Using the app (no typing)
 
@@ -184,13 +183,22 @@ One-time setup (the app launcher does this for you):
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -e ".[ai]"
+```
+
+This installs the `behavetrack` command. Run `source .venv/bin/activate` once per terminal
+to use it by name as below, or type the full path `.venv/bin/behavetrack`.
+`python -m behavetrack` also works.
+
+```bash
+behavetrack app                      # open the browser app
+behavetrack analyze --help           # every option, with its default
 ```
 
 ### Analyze one video
 
 ```bash
-.venv/bin/python -m behavetrack analyze my_video.mp4
+behavetrack analyze my_video.mp4
 ```
 
 Results go to `my_video_behavior/`:
@@ -207,26 +215,26 @@ Results go to `my_video_behavior/`:
 ### Analyze a microscope time-lapse
 
 ```bash
-.venv/bin/python -m behavetrack analyze my_cells.tif --mode cells
-.venv/bin/python -m behavetrack analyze my_cells.nd2 --mode cells --cells-look bright --channel 1
-.venv/bin/python -m behavetrack analyze movie.mp4 --mode cells --pixel-size 0.65 --frame-interval 300
+behavetrack analyze my_cells.tif --mode cells
+behavetrack analyze my_cells.nd2 --mode cells --cells-look bright --channel 1
+behavetrack analyze movie.mp4 --mode cells --pixel-size 0.65 --frame-interval 300
 ```
 
 ### Analyze neurons
 
 ```bash
-.venv/bin/python -m behavetrack analyze gcamp.tif --mode neurons
-.venv/bin/python -m behavetrack analyze gcamp.tif --mode neurons --find-by brightness --frame-interval 0.05
-.venv/bin/python -m behavetrack analyze outgrowth.nd2 --mode neurons --analysis neurites --channel 1
-.venv/bin/python -m behavetrack filter recordings/ --mode neurons --behavior network_burst --clips
+behavetrack analyze gcamp.tif --mode neurons
+behavetrack analyze gcamp.tif --mode neurons --find-by brightness --frame-interval 0.05
+behavetrack analyze outgrowth.nd2 --mode neurons --analysis neurites --channel 1
+behavetrack filter recordings/ --mode neurons --behavior network_burst --clips
 ```
 
-Run `.venv/bin/python -m behavetrack analyze --help` for every option.
+Run `behavetrack analyze --help` for every option and its default.
 
 ### Search many videos for a behavior
 
 ```bash
-.venv/bin/python -m behavetrack filter my_videos/ --behavior collective_motion --min-seconds 2 --clips
+behavetrack filter my_videos/ --behavior collective_motion --min-seconds 2 --clips
 ```
 
 Behaviors: `collective_motion`, `milling`, `disordered`, `resting`, `interaction`, and
@@ -262,3 +270,50 @@ settings work for ants, birds and people.
 - Test cell time-lapse with an answer key: `.venv/bin/python tools/make_test_cells.py samples/test_cells`
 - Test calcium-imaging movie with an answer key: `.venv/bin/python tools/make_test_neurons.py samples/test_neurons`
 - Test neurite time-lapse with an answer key: `.venv/bin/python tools/make_test_neurites.py samples/test_neurites`
+
+## Developing
+
+```bash
+.venv/bin/pip install -e ".[ai,dev]"      # once: the code, the AI detector, and test tools
+.venv/bin/python -m pytest -m "not slow"   # quick tests, a few seconds
+.venv/bin/python -m pytest                 # everything, about a minute
+```
+
+**Code layout.** All analysis lives in the `behavetrack/` package. The browser app
+(`behavetrack/app.py`) and the command line (`behavetrack/cli.py`) are thin front ends that
+collect settings and call `pipeline.run()`. Put new features in the package so both can use them.
+
+| File | What it does |
+|---|---|
+| `settings.py` | every setting and its default, per mode (the single source of defaults) |
+| `pipeline.py` | `run()`: reads a file, runs the right analysis, writes the results |
+| `sources.py` | reads videos, TIFF/ND2/CZI stacks and image folders |
+| `detect.py`, `track.py`, `analyze.py` | animals: finding, tracking, group behavior, interactions |
+| `cells.py` | cells: migration, division and lineage measures |
+| `activity.py`, `neurites.py` | neurons: firing activity, neurite growth |
+| `app.py`, `cli.py` | the browser app and the command line |
+
+**Adding or changing a setting.**
+1. Add it, with its default, to `Settings` in `settings.py` (or to the mode's preset there).
+2. Command line: add the option in `cli.py` with no default, and map it in `_OPTION_FIELDS`
+   (or `_SWITCHES` for an on/off flag). Use the preset's value in the help text.
+3. App: add the widget in `app.py`, with the preset's value (`A`, `C`, `NA` or `NN`) as its
+   default, and pass it to `with_changes(...)`.
+
+Never type a default number into `cli.py` or `app.py`. `tests/test_settings.py` checks that the
+command line and the app produce exactly the `settings.py` defaults in every mode.
+
+**Tests** (`tests/`): settings agree everywhere; every mode stays accurate against its answer
+key; every app results page loads; the commands work; microscope files are read correctly.
+Test movies are generated automatically and cached in `tests/.data/`. Tests marked `slow`
+run full analyses.
+
+**VS Code.** Open the project folder. Its settings select `.venv` and find the tests (beaker
+icon). The Run and Debug panel has buttons for the app, each mode's test file, a file you choose,
+and the quick tests. Run *Terminal → Run Task → Make test data* once first.
+
+**iCloud Drive.** If the project is in an iCloud-synced folder (such as Desktop or Documents),
+keep the libraries in `.venv.nosync`, with `.venv` as a shortcut to it (the launcher sets
+this up). Otherwise iCloud tries to upload them and marks them hidden, and Python then can't
+find the installed `behavetrack` command.
+
