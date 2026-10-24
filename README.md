@@ -210,11 +210,9 @@ Each results folder is one recording. Add `:CONDITION` to group recordings for c
 video is its own network, since track IDs in different videos are different individuals.
 For neurons, `--min-correlation` (default 0.3) sets which pairs count as connected.
 
-**Installing complexity-engine.** It's a private repository, so let pip use your GitHub login
-once, then install it into this project:
+**Installing complexity-engine.** Install it into this project straight from GitHub:
 
 ```bash
-gh auth setup-git
 .venv/bin/pip install -e ".[complexity]"
 ```
 
