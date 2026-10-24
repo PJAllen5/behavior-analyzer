@@ -1,0 +1,21 @@
+# Installed libraries (rebuilt by the launcher / pip install -r requirements.txt)
+.venv/
+__pycache__/
+*.pyc
+
+# Your videos and analysis results
+app_data/
+results/
+*_behavior/
+behavior_results/
+
+# Test media (regenerate with tools/make_test_video.py and tools/make_test_cells.py)
+samples/
+
+# AI model downloaded on first use of the AI detector
+*.pt
+
+# Editor / assistant / OS files
+.claude/
+.agents/
+.DS_Store
