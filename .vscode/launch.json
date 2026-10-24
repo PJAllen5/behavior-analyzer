@@ -1,0 +1,72 @@
+{
+  // Run and debug buttons (Run and Debug panel, or F5). Breakpoints work in all of them.
+  // The "Analyze" entries need the test data: run the task "Make test data" first
+  // (Terminal > Run Task…). Results go to results/<name>/.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "App (browser)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "behavetrack",
+      "args": ["app"],
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true
+    },
+    {
+      "name": "Analyze: animals (test flock)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "behavetrack",
+      "args": ["analyze", "samples/test_flock.mp4", "-o", "results/test_flock"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Analyze: cells (test time-lapse)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "behavetrack",
+      "args": ["analyze", "samples/test_cells.tif", "--mode", "cells", "-o", "results/test_cells"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Analyze: neuron activity (test movie)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "behavetrack",
+      "args": ["analyze", "samples/test_neurons.tif", "--mode", "neurons", "--analysis", "activity",
+               "-o", "results/test_neurons"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Analyze: neurite growth (test movie)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "behavetrack",
+      "args": ["analyze", "samples/test_neurites.tif", "--mode", "neurons", "--analysis", "neurites",
+               "-o", "results/test_neurites"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Analyze: file I choose…",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "behavetrack",
+      "args": ["analyze", "${input:file}", "--mode", "${input:mode}"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Tests: quick",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["-m", "not slow", "-q"],
+      "cwd": "${workspaceFolder}"
+    }
+  ],
+  "inputs": [
+    {"id": "file", "type": "promptString", "description": "Path to the video or microscope file"},
+    {"id": "mode", "type": "pickString", "description": "Mode", "options": ["animals", "cells", "neurons"],
+     "default": "animals"}
+  ]
+}

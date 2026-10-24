@@ -1,0 +1,42 @@
+{
+  // Terminal > Run Task…
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Install / update dependencies",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/pip install -e \".[ai,dev]\"",
+      "problemMatcher": []
+    },
+    {
+      "label": "Make test data",
+      "detail": "Writes the four test movies and answer keys to samples/",
+      "type": "shell",
+      "command": "mkdir -p samples && .venv/bin/python tools/make_test_video.py samples/test_flock.mp4 && for n in cells neurons neurites; do .venv/bin/python tools/make_test_$n.py samples/test_$n; done",
+      "options": {"cwd": "${workspaceFolder}", "shell": {"executable": "/bin/zsh", "args": ["-c"]}},
+      "problemMatcher": []
+    },
+    {
+      "label": "Tests: quick (a few seconds)",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/python -m pytest -m 'not slow' -q",
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Tests: all (about 2 minutes)",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/python -m pytest -q",
+      "group": {"kind": "test", "isDefault": true},
+      "problemMatcher": []
+    },
+    {
+      "label": "Check accuracy against the answer keys",
+      "detail": "Needs results from the Analyze run configurations",
+      "type": "shell",
+      "command": "for t in cells neurons neurites; do echo \"== $t\"; .venv/bin/python tools/check_$t.py samples/test_$t results/test_$t; done",
+      "options": {"cwd": "${workspaceFolder}", "shell": {"executable": "/bin/zsh", "args": ["-c"]}},
+      "problemMatcher": []
+    }
+  ]
+}
