@@ -177,6 +177,51 @@ between them and counts as a branch point; branches shorter than about 3 µm are
 neurites that leave the image are measured only up to the edge. Dense networks (mature cultures)
 are hard to assign to single neurons; very sparse labelling works best.
 
+## Complexity analysis (complexity-engine)
+
+[complexity-engine](https://github.com/PJAllen5/complexity-engine) measures how regular,
+persistent and networked a signal or network is (sample entropy, spectral entropy, DFA,
+mutual information, clustering, modularity, path length), and explains the results with
+profiles grounded in a cited literature base. It has four profiles written for this tracker's
+output:
+
+| Exported file | From | complexity-engine profile | What it asks |
+|---|---|---|---|
+| `collective_timeseries.csv` | animals, cells | `collective_behavior` | Does the group's coordination fluctuate randomly, or in long bouts and switches between states? |
+| `neural_timeseries.csv` | neuron activity | `neural_activity` | Is each neuron's activity irregular, or structured over long time scales? |
+| `contact_network.csv` | animals, cells | `animal_social_network` | Are contacts spread evenly, or concentrated in subgroups and central individuals? |
+| `functional_network.csv` | neuron activity | `neuronal_network` | Is coordinated firing spread across the population, or organized into modules and hubs? |
+
+Neurite-growth results are skipped: their time-lapses have too few frames for these measures.
+
+**In the app:** open a result in **Results** and press **Run complexity analysis** at the
+bottom. It shows the key numbers and offers the full report, with interpretation and citations,
+as an HTML file. Results are saved in that result's `complexity/` folder.
+
+**On the command line:**
+
+```bash
+behavetrack export-complexity results/video1:control results/video2:treated --run
+```
+
+Each results folder is one recording. Add `:CONDITION` to group recordings for comparison
+(otherwise each is its own condition). Without `--run`, it writes the files and prints the
+`complexity-analysis` / `complexity-network` commands to run yourself. In the network files each
+video is its own network, since track IDs in different videos are different individuals.
+For neurons, `--min-correlation` (default 0.3) sets which pairs count as connected.
+
+**Installing complexity-engine.** Install it into this project straight from GitHub:
+
+```bash
+.venv/bin/pip install -e ".[complexity]"
+```
+
+Or, if you have a local copy of complexity-engine that you're editing:
+
+```bash
+.venv/bin/pip install -e /path/to/complexity-engine
+```
+
 ## Using the command line
 
 One-time setup (the app launcher does this for you):
@@ -291,6 +336,7 @@ collect settings and call `pipeline.run()`. Put new features in the package so b
 | `detect.py`, `track.py`, `analyze.py` | animals: finding, tracking, group behavior, interactions |
 | `cells.py` | cells: migration, division and lineage measures |
 | `activity.py`, `neurites.py` | neurons: firing activity, neurite growth |
+| `export.py` | files for complexity-engine, and running it |
 | `app.py`, `cli.py` | the browser app and the command line |
 
 **Adding or changing a setting.**

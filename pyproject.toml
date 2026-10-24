@@ -28,6 +28,8 @@ dependencies = [
 [project.optional-dependencies]
 ai = ["ultralytics>=8.3"]   # the "Animals or people (AI)" detector / --detector yolo
 dev = ["pytest>=8", "watchdog>=4"]   # tests, and faster app reloads while editing
+# complexity-engine, for `behavetrack export-complexity --run` and the app's complexity analysis.
+complexity = ["complexity-engine @ git+https://github.com/PJAllen5/complexity-engine.git"]
 
 [project.scripts]
 behavetrack = "behavetrack.cli:main"

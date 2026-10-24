@@ -71,6 +71,62 @@ def get(name: str) -> dict:
     return {**r, "dir": d}
 
 
+COMPLEXITY_TITLES = {
+    "collective_timeseries.csv": "Group dynamics over time",
+    "neural_timeseries.csv": "Neuron activity over time",
+    "contact_network.csv": "Contact network",
+    "functional_network.csv": "Functional network of neurons",
+}
+
+
+def complexity_section(r: dict, name: str) -> None:
+    """Export this result for complexity-engine and, when it's installed, run it here."""
+    from behavetrack.export import ENGINE_RUNS, engine_available, export, run_engine
+
+    s = r["summary"]
+    st.subheader("Complexity analysis")
+    if s.get("mode") == "neurons" and s.get("neural_analysis") == "neurites":
+        st.caption("Neurite-growth time-lapses have too few frames for complexity measures.")
+        return
+    st.caption("How regular, persistent and networked the behavior is, measured by complexity-engine "
+               "and explained with its research-backed profiles.")
+    cx = r["dir"] / "complexity"
+    reports = cx / "reports"
+    if engine_available():
+        if st.button("Run complexity analysis" if not reports.exists() else "Run again",
+                     icon=":material/analytics:", key=f"cx_run_{name}"):
+            with st.spinner("Running complexity-engine…"):
+                run_engine(export([(r["dir"], name)], cx), cx)
+    else:
+        st.info("Install complexity-engine to run the analysis here (see the README, "
+                "\"Complexity analysis\"). You can still download the files it reads.",
+                title="complexity-engine is not installed")
+        if st.button("Prepare files for complexity-engine", icon=":material/output:", key=f"cx_export_{name}"):
+            export([(r["dir"], name)], cx)
+        files = [cx / f for f in ENGINE_RUNS if (cx / f).exists()]
+        if files:
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+                for f in files:
+                    z.write(f, f.name)
+            st.download_button("Download files (.zip)", buf.getvalue(), icon=":material/download:",
+                               file_name=f"{name}_complexity_input.zip", mime="application/zip")
+        return
+
+    for file, (pipeline, domain, _, _) in ENGINE_RUNS.items():
+        folder = reports / Path(file).stem
+        if not (folder / "report.html").exists():
+            continue
+        with st.expander(f"{COMPLEXITY_TITLES[file]} (profile: {domain})", expanded=True):
+            table = folder / ("complexity_summary.csv" if pipeline == "timeseries" else "network_metrics_summary.csv")
+            if table.exists():
+                st.dataframe(pd.read_csv(table).round(3), hide_index=True,
+                             alt=f"complexity-engine results for {COMPLEXITY_TITLES[file].lower()}")
+            st.download_button("Full report with interpretation (.html)", (folder / "report.html").read_bytes(),
+                               icon=":material/description:", file_name=f"{name}_{Path(file).stem}_report.html",
+                               mime="text/html", key=f"cx_dl_{name}_{file}")
+
+
 def zip_folder(d: Path) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
@@ -734,6 +790,8 @@ with tab_view:
             st.download_button("Download all data (.zip)", zip_folder(r["dir"]), icon=":material/download:",
                                file_name=f"{name}_behavior_data.zip", mime="application/zip")
             st.caption(f"Files are also saved in `app_data/results/{name}/`.")
+
+        complexity_section(r, name)
 
 with tab_search:
     names = analyses()
