@@ -220,16 +220,19 @@ def sequences(folder: Path, d: Dataset) -> list[Path]:
     return sorted(p for p in folder.iterdir() if p.suffix.lower() in {".mp4", ".avi", ".mov", ".mkv"})
 
 
-def neurofinder_rate(folder: Path) -> tuple[float | None, str | None]:
-    """Frame rate and indicator from a Neurofinder info.json, when present."""
+def neurofinder_info(folder: Path) -> dict:
+    """Frame rate, pixel size, indicator and brain region from a Neurofinder info.json, when present."""
     for info in folder.rglob("info.json"):
         try:
             meta = json.loads(info.read_text())
         except (OSError, ValueError):
             continue
         rate = meta.get("rate-hz") or meta.get("rate_hz")
-        return (float(rate) if rate else None), meta.get("indicator")
-    return None, None
+        ppm = meta.get("pixels-per-micron") or meta.get("pixels_per_micron")
+        return {"rate_hz": float(rate) if rate else None,
+                "pixel_size_um": 1 / float(ppm) if ppm else None,
+                "indicator": meta.get("indicator"), "region": meta.get("region")}
+    return {}
 
 
 def analyze_command(d: Dataset, target: str, folder: Path | None = None) -> str:
@@ -237,11 +240,15 @@ def analyze_command(d: Dataset, target: str, folder: Path | None = None) -> str:
 
     opts, details = list(d.options), dict(d.details)
     if d.source == "Neurofinder" and folder is not None:
-        rate, indicator = neurofinder_rate(folder)
-        if rate:
-            opts += ["--frame-interval", f"{1 / rate:.5f}"]
-        if indicator in ("GCaMP6s", "GCaMP6m", "GCaMP6f"):
-            details["indicator"] = indicator
+        info = neurofinder_info(folder)
+        if info.get("rate_hz"):
+            opts += ["--frame-interval", f"{1 / info['rate_hz']:.5f}"]
+        if info.get("pixel_size_um"):
+            opts += ["--pixel-size", f"{info['pixel_size_um']:.4f}"]
+        if info.get("indicator") in ("GCaMP6s", "GCaMP6m", "GCaMP6f"):
+            details["indicator"] = info["indicator"]
+        if info.get("region"):
+            details["brain_region"] = info["region"]
     meta = [x for k, v in details.items() for x in ("--meta", f"{k}={v}")]
     out = f"results/{d.name}" + (f"-{Path(target).parent.name}-{Path(target).name}" if folder else "")
     return " ".join(quote(x) for x in ["behavetrack", "analyze", target, *opts, *meta, "-o", out])

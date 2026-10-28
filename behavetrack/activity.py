@@ -253,6 +253,61 @@ def find_neurons(img: dict, diam: float, by: str = "activity", adjust: float = 0
     return keep
 
 
+_CELLPOSE = {}  # loaded model, reused between movies
+
+
+def cellpose_available() -> bool:
+    try:
+        import cellpose  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+CELLPOSE_HINT = ('The Cellpose neuron finder needs Cellpose. Install it with:  pip install -e ".[cellpose]"  '
+                 "(its model, about 1.2 GB, downloads on first use).")
+
+
+def find_neurons_cellpose(img: dict, diam: float) -> tuple[np.ndarray, dict]:
+    """Outline neurons with Cellpose (Stringer et al., 2021) on the enhanced mean image.
+
+    The mean image has its slow background removed and its contrast stretched, so cell bodies
+    stand out. On Neurofinder 00.00 this scored F1 0.54 against hand labels, against 0.24 for the
+    built-in finder (see README). Cellpose estimates the cell size itself; a size hint scored lower.
+    Returns the label image (numbered 1..N from top-left) and details to record with the result.
+    """
+    if not cellpose_available():
+        raise RuntimeError(CELLPOSE_HINT)
+    import importlib.metadata
+
+    from cellpose import models
+
+    if "model" not in _CELLPOSE:
+        _CELLPOSE["model"] = models.CellposeModel(gpu=True)  # GPU (Apple or NVIDIA) when available
+    model = _CELLPOSE["model"]
+    mean = img["mean"].astype(np.float32)
+    hp = mean - ndi.gaussian_filter(mean, 4 * max(diam, 2))
+    hp[~img["valid"]] = np.median(hp[img["valid"]]) if img["valid"].any() else 0
+    lo, hi = np.percentile(hp, [1, 99.5])
+    enhanced = np.clip((hp - lo) / max(hi - lo, 1e-9), 0, 1)
+    masks, *_ = model.eval(enhanced, diameter=None)
+    masks = np.asarray(masks, np.int32)
+    masks[~img["valid"]] = 0
+    ids = [i for i in np.unique(masks) if i]
+    lab = np.zeros(masks.shape, np.int32)
+    if ids:
+        cents = ndi.center_of_mass(masks > 0, masks, ids)
+        sizes = ndi.sum(masks > 0, masks, ids)
+        d = float(2 * np.sqrt(np.median(sizes) / np.pi))
+        order = sorted(range(len(ids)), key=lambda j: (round(cents[j][0] / max(d, 1)), cents[j][1]))
+        for new, j in enumerate(order, start=1):
+            lab[masks == ids[j]] = new
+    info = {"neuron_finder": "cellpose",
+            "cellpose_version": importlib.metadata.version("cellpose"),
+            "cellpose_model": str(getattr(model, "pretrained_model", "default")).split("/")[-1]}
+    return lab, info
+
+
 def roi_weights(lab: np.ndarray, diam: float):
     """Sparse matrices that average each neuron's pixels, and its neuropil ring."""
     H, W = lab.shape
@@ -439,7 +494,14 @@ def run(src, out_dir: Path, s, fps: float, first: int, last: int, scale: float,
     diam_set = s.cell_diameter_px * scale if s.cell_diameter_px else None
     img = summary_images(mv, diam_set, s.correct_drift, progress)
     diam, T = img["diameter"], img["frames"]
-    lab = find_neurons(img, diam, s.find_neurons_by, s.threshold_adjust)
+    finder_info = {"neuron_finder": "built-in"}
+    if getattr(s, "neuron_finder", "built-in") == "cellpose":
+        lab, finder_info = find_neurons_cellpose(img, diam)
+        if lab.max():  # use the size Cellpose found, for each neuron's surrounding ring
+            sizes = ndi.sum(lab > 0, lab, np.arange(1, lab.max() + 1))
+            diam = float(2 * np.sqrt(np.median(sizes) / np.pi))
+    else:
+        lab = find_neurons(img, diam, s.find_neurons_by, s.threshold_adjust)
     N = int(lab.max())
     k, L = units(pixel_size / scale if pixel_size else None)
     t = (np.arange(T) + first) / fps
@@ -449,7 +511,7 @@ def run(src, out_dir: Path, s, fps: float, first: int, last: int, scale: float,
             "max_drift_step_px": round(float(np.abs(np.diff(img["shifts"], axis=0)).max() / scale), 2)
             if T > 1 else 0.0,
             "drift_frames_skipped": img["drift_skipped"],
-            "length_unit": "µm" if L == "um" else "pixels", "calibrated": bool(pixel_size)}
+            "length_unit": "µm" if L == "um" else "pixels", "calibrated": bool(pixel_size), **finder_info}
     if N == 0:
         for f in ("neurons", "events", "bursts", "traces_dff", "traces_raw", "correlations", "frames"):
             pd.DataFrame().to_csv(out_dir / f"{f}.csv", index=False)

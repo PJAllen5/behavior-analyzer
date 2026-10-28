@@ -133,6 +133,34 @@ recordings (e.g. awake animals) need motion correction first. Events closer toge
 raw brightness, so a large camera offset makes it smaller. For large in-vivo datasets use a
 specialised tool such as Suite2p or CaImAn.
 
+#### Neuron finder: built-in or Cellpose
+
+Neurons can be outlined two ways:
+
+- **Built-in** (default): finds bright or flickering spots in the movie's summary images. No
+  extra installation, and works well on clean, sparse recordings like the generated test movie.
+- **Cellpose**: outlines cell bodies on the enhanced mean image with Cellpose, a published,
+  widely used cell-segmentation model (Stringer et al., 2021; this uses its current Cellpose-SAM
+  model). Choose it under *Neuron finder* in the app, or `--neuron-finder cellpose`. Install it
+  once with `.venv/bin/pip install -e ".[cellpose]"`; its model (about 1.2 GB) downloads to
+  `~/.cellpose/models` the first time it runs. It is BSD-licensed, compatible with this
+  project's MIT license, and uses the GPU on Macs with Apple silicon.
+
+On a real two-photon recording with 330 hand-labelled neurons (Neurofinder 00.00, scored with
+`behavetrack score`), Cellpose was more than twice as accurate:
+
+| Neuron finder | Labelled neurons found | Found neurons that are labelled | F1 |
+|---|---|---|---|
+| Built-in (best of four settings) | 18% | 37% | 0.24 |
+| Cellpose | 45% | 67% | 0.54 |
+
+**If the movie is already motion-corrected** (as Neurofinder's are), turn off *Correct drift*
+(`--no-drift`). On that recording, drift correction found spurious shifts and lowered Cellpose's
+F1 from 0.54 to 0.43.
+
+> Stringer, C., Wang, T., Michaelos, M. & Pachitariu, M. Cellpose: a generalist algorithm for
+> cellular segmentation. *Nature Methods* 18, 100–106 (2021).
+
 ### Neurite growth
 
 For fluorescent (GFP, βIII-tubulin, MAP2, …), brightfield or phase-contrast images of neurons in
@@ -231,6 +259,19 @@ their own folder. Each gets an `ABOUT.txt` with its source, citation, where its 
 is, and the exact `behavetrack analyze` command for each image sequence, including the
 microscope calibration and experiment details from the source, so the data checks apply.
 Please cite each dataset's source if you use it in your work.
+
+**Scoring against an answer key.** For Neurofinder, `behavetrack score` compares the neurons
+found with the hand-labelled ones and saves `score.json` in the results folder:
+
+```bash
+behavetrack score results/neurofinder.00.00 --neurofinder benchmarks/neurofinder.00.00/neurofinder.00.00/regions/regions.json
+```
+
+It reports the share of labelled neurons found (recall), the share of found neurons that are
+labelled (precision), and their balance (F1, 1 = perfect). A found neuron matches a labelled one
+when their centres are within 5 pixels. This is a centre-matching score in the spirit of the
+benchmark, not its official evaluation code, so compare scores from this command with each
+other rather than with published ones.
 
 ## Complexity analysis (complexity-engine)
 
@@ -392,6 +433,7 @@ collect settings and call `pipeline.run()`. Put new features in the package so b
 | `cells.py` | cells: migration, division and lineage measures |
 | `activity.py`, `neurites.py` | neurons: firing activity, neurite growth |
 | `export.py` | files for complexity-engine, and running it |
+| `scoring.py` | scores against benchmark answer keys (`behavetrack score`) |
 | `metadata.py` | experiment details (REMBI / MIACME) |
 | `checks.py`, `reference/` | data checks; thresholds, explanations and sources in `reference/checks.yaml` |
 | `app.py`, `cli.py` | the browser app and the command line |

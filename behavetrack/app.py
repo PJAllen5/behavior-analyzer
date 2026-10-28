@@ -513,6 +513,16 @@ with st.sidebar:
                 help="Ones that fire: finds neurons by their flicker. All visible: finds bright cell "
                      "bodies, so neurons that stay silent are counted too (needs a dye that shows "
                      "resting neurons).")
+            from behavetrack.activity import cellpose_available
+            finder = st.segmented_control(
+                "Neuron finder", ["Built-in", "Cellpose"],
+                default="Cellpose" if NA.neuron_finder == "cellpose" else "Built-in", required=True,
+                help="Cellpose outlines cell bodies with a trained model (Stringer et al., 2021). On a real "
+                     "two-photon benchmark it found neurons about twice as accurately as the built-in "
+                     "finder. It needs to be installed, and downloads its model (about 1.2 GB) on first use.")
+            if finder == "Cellpose" and not cellpose_available():
+                st.caption(":material/info: Cellpose isn't installed. In a terminal in the project folder: "
+                           '`.venv/bin/pip install -e ".[cellpose]"`, then restart the app.')
             strict = st.slider("Detection", -0.5, 0.5, NA.threshold_adjust, 0.05,
                                help="Move left to find fainter neurons, right to ignore weak ones.")
             st.caption("← finds fainter neurons · stricter →")
@@ -544,7 +554,7 @@ with st.sidebar:
                                                 "fading (bleaching).")
                 make_video = st.toggle("Make annotated video", NA.annotate)
             settings = with_changes(
-                NA, find_neurons_by="activity" if find_by == "Ones that fire" else "brightness",
+                NA, neuron_finder="cellpose" if finder == "Cellpose" else "built-in", find_neurons_by="activity" if find_by == "Ones that fire" else "brightness",
                 threshold_adjust=strict, event_threshold_sd=ev_sd, correct_drift=drift,
                 pixel_size_um=px, frame_interval_s=1 / rate if rate else 0.0, cell_diameter_px=diam,
                 channel=int(channel), neuropil_factor=neuropil, min_event_dff=min_ev,
