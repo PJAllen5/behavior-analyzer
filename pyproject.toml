@@ -38,6 +38,10 @@ behavetrack-app = "behavetrack.cli:app_main"
 [tool.setuptools]
 packages = ["behavetrack"]
 
+[tool.setuptools.package-data]
+# data checks: thresholds, explanations and their sources
+behavetrack = ["reference/*.yaml", "reference/*.bib"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["slow: analyzes generated test movies and checks accuracy (about 2 minutes in total)"]

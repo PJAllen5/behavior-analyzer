@@ -18,6 +18,7 @@ from pathlib import Path
 import pandas as pd
 
 from .analyze import COLLECTIVE, DISORDERED, MILLING, RESTING
+from .checks import recheck
 from .pipeline import extract_clip, run
 from .settings import MODES, NEURAL_ANALYSES, Settings, defaults, with_changes
 from .sources import ALL_EXT as VIDEO_EXT
@@ -120,6 +121,45 @@ def _add_common(p: argparse.ArgumentParser):
                    help=f"speed (body lengths/s) below which an object counts as still (default {_A.moving_bl_s})")
     g.add_argument("--min-behavior-seconds", type=float, help=f"default {_A.min_behavior_seconds:g}")
     p.add_argument("--no-video", action="store_true", help="skip the annotated video")
+    _add_metadata(p)
+
+
+def _add_metadata(p: argparse.ArgumentParser):
+    from .metadata import FIELDS
+
+    g = p.add_argument_group(
+        "experiment details (saved with the results and used by the data checks)",
+        "Keys: " + ", ".join(f.key for f in FIELDS) + ". Run `behavetrack details` to list them with choices.")
+    g.add_argument("--meta", action="append", default=[], metavar="KEY=VALUE",
+                   help="an experiment detail, e.g. --meta organism=zebrafish --meta expected_individuals=40")
+    g.add_argument("--metadata", metavar="FILE.json", help="experiment details from a JSON file")
+
+
+def _metadata(a) -> dict:
+    from .metadata import clean, parse_pairs
+
+    meta = json.loads(Path(a.metadata).read_text()) if getattr(a, "metadata", None) else {}
+    meta.update(parse_pairs(a.meta))
+    try:
+        return clean(meta)
+    except ValueError as e:
+        sys.exit(f"Experiment details: {e}")
+
+
+def _print_checks(out: Path):
+    from .checks import load
+
+    found = load(out)
+    if not found:
+        return
+    warn = [c for c in found if c.status == "warn"]
+    print(f"\nData checks: {len(warn)} to look at, "
+          f"{sum(c.status == 'ok' for c in found)} fine, {sum(c.status == 'info' for c in found)} not checked")
+    for c in found:
+        mark = {"warn": "!", "ok": "✓", "info": "·"}[c.status]
+        print(f"  {mark} {c.title}: {c.message}")
+    if warn:
+        print(f"Details and sources: {out / 'checks.json'}")
 
 
 def _settings(a) -> Settings:
@@ -147,10 +187,35 @@ def _videos(paths: list[str]) -> list[Path]:
 
 def cmd_analyze(a):
     out = Path(a.out) if a.out else Path(a.video).with_name(Path(a.video).stem + "_behavior")
-    summary = run(a.video, out, _settings(a))
+    summary = run(a.video, out, _settings(a), metadata=_metadata(a))
     summary.pop("seconds_in_each_behavior", None) if a.mode != "animals" else None
-    print(json.dumps({k: v for k, v in summary.items() if k != "settings"}, indent=2))
+    print(json.dumps({k: v for k, v in summary.items() if k not in ("settings", "checks")}, indent=2))
     print(f"\nData files written to: {out}/")
+    _print_checks(out)
+
+
+def cmd_check(a):
+    """Re-run the data checks, optionally adding or changing experiment details first."""
+    from .metadata import load
+
+    for folder in map(Path, a.results):
+        if not (folder / "summary.json").exists():
+            print(f"Skipped {folder}: not a results folder")
+            continue
+        meta = load(folder)
+        new = _metadata(a)
+        recheck(folder, {**meta, **new} if new else None)
+        print(f"== {folder.name}")
+        _print_checks(folder)
+
+
+def cmd_details(a):
+    from .metadata import FIELDS
+
+    for f in FIELDS:
+        modes = "all modes" if len(f.modes) == 3 else ", ".join(f.modes)
+        kind = "number" if f.number else ("one of: " + "; ".join(f.choices)) if f.choices else "text"
+        print(f"{f.key:22s} {f.label} ({modes}; {kind})\n{'':22s} {f.help}")
 
 
 def cmd_filter(a):
@@ -164,7 +229,7 @@ def cmd_filter(a):
         if (res / "summary.json").exists() and not a.rerun:
             print(f"Using earlier results for {v.name}")
         else:
-            run(v, res, s)
+            run(v, res, s, metadata=_metadata(a))
         if a.behavior in ("interaction", "network_burst"):
             f = res / ("interactions.csv" if a.behavior == "interaction" else "bursts.csv")
             df = pd.read_csv(f) if f.exists() and f.stat().st_size > 1 else pd.DataFrame()
@@ -241,6 +306,14 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="behavetrack",
                                 description="Track animals, people, cells and neurons in video and export behavior data.")
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    pc = sub.add_parser("check", help="re-run the data checks on results, e.g. after adding experiment details")
+    pc.add_argument("results", nargs="+", help="results folders")
+    _add_metadata(pc)
+    pc.set_defaults(func=cmd_check)
+
+    pd_ = sub.add_parser("details", help="list the experiment details you can record")
+    pd_.set_defaults(func=cmd_details)
 
     pe = sub.add_parser("export-complexity",
                         help="write results in complexity-engine's format (and optionally run it)")

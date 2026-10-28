@@ -46,7 +46,28 @@ def playback_fps(fps: float) -> float:
 
 
 def run(video: str | Path, out_dir: str | Path, s: Settings,
-        progress: ProgressFn | None = None) -> dict:
+        progress: ProgressFn | None = None, metadata: dict | None = None) -> dict:
+    """Analyze one video or microscope file, then save its experiment details and data checks.
+
+    metadata: experiment details (see metadata.py), saved as metadata.json and used by the
+    checks, which are saved as checks.json with a count in summary.json.
+    """
+    from . import checks as data_checks
+    from . import metadata as md
+
+    meta = md.clean(metadata)  # reject bad details before spending time on the analysis
+    summary = _analyze(video, out_dir, s, progress)
+    out_dir = Path(out_dir)
+    md.save(out_dir, meta)
+    summary["metadata"] = meta
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
+    found = data_checks.run_checks(out_dir, summary, meta)
+    summary["checks"] = data_checks.save(out_dir, found)
+    return summary
+
+
+def _analyze(video: str | Path, out_dir: str | Path, s: Settings,
+             progress: ProgressFn | None = None) -> dict:
     video, out_dir = Path(video), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     try:

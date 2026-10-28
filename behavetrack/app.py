@@ -71,6 +71,68 @@ def get(name: str) -> dict:
     return {**r, "dir": d}
 
 
+def details_inputs(mode: str, current: dict, prefix: str) -> dict:
+    """Widgets for the experiment details that apply to this mode. Returns the entered values."""
+    from behavetrack.metadata import fields_for
+
+    values = {}
+    cols = st.columns(2)
+    for i, f in enumerate(fields_for(mode)):
+        key = f"{prefix}_{f.key}"
+        now = current.get(f.key)
+        with cols[i % 2]:
+            if f.choices:
+                values[f.key] = st.selectbox(f.label, f.choices, help=f.help, key=key,
+                                             index=f.choices.index(now) if now in f.choices else None,
+                                             placeholder="Not set")
+            elif f.number:
+                values[f.key] = st.number_input(f.label, value=float(now) if now is not None else None,
+                                                help=f.help, key=key, placeholder="Not set")
+            else:
+                values[f.key] = st.text_input(f.label, value=now or "", help=f.help, key=key)
+    return values
+
+
+STATUS_ICON = {"warn": ":material/warning:", "ok": ":material/check_circle:", "info": ":material/info:"}
+
+
+def checks_section(r: dict, name: str) -> None:
+    """Data checks for this result, and a form to add or correct its experiment details."""
+    from behavetrack.checks import load, recheck
+    from behavetrack.metadata import clean, load as load_meta
+
+    found = load(r["dir"])
+    if not found:  # results from before checks existed
+        found = recheck(r["dir"])
+    warn = [c for c in found if c.status == "warn"]
+    rest = [c for c in found if c.status != "warn"]
+    st.subheader("Data checks")
+    st.caption("Is this result plausible for its field, and was it recorded in a way that supports it? "
+               "Each check explains its reasoning and sources; none of them change the results.")
+    for c in warn:
+        st.warning(c.message, title=c.title, icon=STATUS_ICON["warn"])
+        st.caption(c.why)
+    if rest:
+        ok = sum(c.status == "ok" for c in rest)
+        info = len(rest) - ok
+        label = f"{ok} passed" + (f", {info} not checked" if info else "")
+        with st.expander(label, icon=STATUS_ICON["ok"] if not warn else None, expanded=not warn and info > 0):
+            for c in rest:
+                st.markdown(f"{STATUS_ICON[c.status]} **{c.title}**: {c.message}", help=c.why)
+    with st.expander("Experiment details", icon=":material/edit_note:"):
+        st.caption("Saved with this result (metadata.json) and used by the checks above. Saving re-runs "
+                   "the checks; the analysis itself doesn't change.")
+        with st.form(f"details_{name}"):
+            entered = details_inputs(r["summary"].get("mode", "animals"), load_meta(r["dir"]), f"edit_{name}")
+            if st.form_submit_button("Save and re-check", icon=":material/fact_check:"):
+                try:
+                    recheck(r["dir"], clean(entered))
+                except ValueError as e:
+                    st.error(str(e))
+                else:
+                    st.rerun()
+
+
 COMPLEXITY_TITLES = {
     "collective_timeseries.csv": "Group dynamics over time",
     "neural_timeseries.csv": "Neuron activity over time",
@@ -597,6 +659,12 @@ with tab_add:
         st.write("Drop in one or more videos, check the settings on the left, then press **Analyze**.")
     files = st.file_uploader("Videos or microscope files", type=FILE_TYPES,
                              accept_multiple_files=True, label_visibility="collapsed")
+    current_mode = "neurons" if neuron_mode else "cells" if cells_mode else "animals"
+    with st.expander("Experiment details (recommended)", icon=":material/edit_note:"):
+        st.caption("Saved with each result so others can interpret it, following the REMBI and MIACME "
+                   "reporting standards. The data checks use them too, for example the calcium indicator "
+                   "sets how fast a movie must be recorded. Applies to every file you analyze now.")
+        details = details_inputs(current_mode, {}, f"new_{current_mode}")
     if st.button("Analyze", type="primary", icon=":material/play_arrow:", disabled=not files):
         for up in files:
             path = UPLOADS / up.name
@@ -607,7 +675,7 @@ with tab_add:
             st.write(f"**{up.name}**")
             bar = st.progress(0.0, text="Starting…")
             try:
-                summ = run(path, out, settings,
+                summ = run(path, out, settings, metadata=details,
                            progress=lambda stage, f: bar.progress(min(f, 1.0), text=f"{stage}… {f:.0%}"))
             except (SystemExit, Exception) as e:  # noqa: BLE001
                 bar.empty()
@@ -652,6 +720,7 @@ with tab_view:
         name = st.selectbox("Video", names, index=names.index(sel) if sel in names else 0)
         r = get(name)
         s, fr = r["summary"], r["frames"]
+        checks_section(r, name)
         is_cells = s.get("mode") == "cells"
         vid = r["dir"] / "annotated.mp4"
 
