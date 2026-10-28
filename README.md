@@ -177,6 +177,38 @@ between them and counts as a branch point; branches shorter than about 3 µm are
 neurites that leave the image are measured only up to the edge. Dense networks (mature cultures)
 are hard to assign to single neurons; very sparse labelling works best.
 
+## Data checks and experiment details
+
+Every result is checked for whether it is plausible for its field, and whether the recording
+can support it. Checks only advise: nothing is blocked or changed. Each one explains its
+reasoning and cites its sources.
+
+| Mode | Checks |
+|---|---|
+| All | key experiment details recorded |
+| Animals | individuals kept their identities; tracked count matches the group size; animals large enough in the image; frame rate fast enough for the movement |
+| Cells | pixel size and frame timing known; cell size (Milo et al., 2010) and migration speed (Maiuri et al., 2012) plausible; frames close enough for tracking (Meijering et al., 2012); cells followed long enough (Gorelik & Gautreau, 2014); division rate plausible |
+| Neurons | pixel size and frame rate known; frame rate fast enough for the calcium indicator (Chen et al., 2013); neuron size plausible (Fiala & Harris, 1999); recording long enough for the resting level; enough time points for neurite growth |
+
+**Experiment details** (species, cell line, calcium indicator, temperature, imaging method and
+so on) follow two reporting standards: REMBI for biological images (Sarkans et al., 2021) and
+MIACME for cell migration (Gonzalez-Beltran et al., 2020). They are saved with each result as
+`metadata.json`, and some checks use them: the indicator sets how fast a movie must be recorded,
+and the kind of cells decides which published speeds and division times apply.
+
+- **App:** fill in *Experiment details* on the **Add videos** tab before analyzing. Each result
+  shows its **Data checks** near the top; add or correct details there and the checks re-run
+  without re-analyzing.
+- **Command line:** `--meta KEY=VALUE` (repeatable) or `--metadata details.json` on `analyze`
+  and `filter`. `behavetrack details` lists every detail and its choices.
+  `behavetrack check RESULTS... --meta indicator=GCaMP6s` re-runs the checks after adding details.
+- **Files:** `checks.json` (every check, its status, message and reasoning), with counts in
+  `summary.json`.
+
+The thresholds, explanations and sources live in `behavetrack/reference/checks.yaml`, with the
+papers in `behavetrack/reference/references.bib`; adjust them there. A test makes sure every
+citation matches the bibliography.
+
 ## Complexity analysis (complexity-engine)
 
 [complexity-engine](https://github.com/PJAllen5/complexity-engine) measures how regular,
@@ -337,6 +369,8 @@ collect settings and call `pipeline.run()`. Put new features in the package so b
 | `cells.py` | cells: migration, division and lineage measures |
 | `activity.py`, `neurites.py` | neurons: firing activity, neurite growth |
 | `export.py` | files for complexity-engine, and running it |
+| `metadata.py` | experiment details (REMBI / MIACME) |
+| `checks.py`, `reference/` | data checks; thresholds, explanations and sources in `reference/checks.yaml` |
 | `app.py`, `cli.py` | the browser app and the command line |
 
 **Adding or changing a setting.**

@@ -1,0 +1,192 @@
+# Data checks: is a result plausible for its field, and was it recorded in a way that supports it?
+#
+# Each check is computed in behavetrack/checks.py (by its id); everything a researcher might want
+# to adjust lives here: thresholds, the explanation shown with a warning, and its sources.
+#
+#   kind: setup    about how the recording or analysis was set up
+#         biology  the result compared with published values for the field
+#   warn / ok:     shown in the app and on the command line; {value} and {limit} are filled in
+#   why:           the reasoning, with (Author, Year) citations that must match references.bib
+#                  (tests/test_checks.py checks every citation)
+#
+# A check never blocks anything. It flags results worth a second look before they are reported.
+
+checks:
+  # ------------------------------------------------------------------------------- all modes
+  - id: details_recorded
+    modes: [animals, cells, neurons]
+    kind: setup
+    title: Experiment details recorded
+    warn: "Missing: {value}. Add them so the results can be interpreted and checked."
+    ok: All key details recorded.
+    why: Reporting standards for biological images ask for the sample, how it was prepared and how it was imaged, because the same numbers mean different things for different samples (Sarkans et al., 2021). Some checks below also need these details, such as the calcium indicator or the kind of cells.
+
+  # ------------------------------------------------------------------------------- animals
+  - id: animals_id_breaks
+    modes: [animals]
+    kind: setup
+    title: Individuals kept their identities
+    limit: 1.5
+    warn: "{value} track IDs per individual in view (above {limit}). Many animals were lost and found again under new IDs."
+    ok: "{value} track IDs per individual in view."
+    why: Each time the tracker loses an individual and finds it again, it starts a new ID, so per-individual results (tracks, interactions, contact networks) split one animal into several. A higher frame rate, better contrast, or less overlap between animals reduces this.
+
+  - id: animals_expected_count
+    modes: [animals]
+    kind: setup
+    title: Tracked count matches the group size
+    needs: [expected_individuals]
+    limit: 0.2
+    warn: "The tracker typically saw {value}, more than 20% away from the group size you entered. Animals may be merging, hidden, or out of view, or background movement is being counted."
+    ok: "The tracker typically saw {value}."
+    why: Group measures such as spacing and alignment change with the number of individuals included, so counts that are too high or too low change the results.
+
+  - id: animals_size
+    modes: [animals]
+    kind: setup
+    title: Animals are large enough in the image
+    limit: 8
+    warn: "Animals are about {value} pixels long (below {limit}). Detection and headings are unreliable at this size; use a larger processing size or film closer."
+    ok: "Animals are about {value} pixels long."
+    why: Heading, speed and contact measures come from the outline of each detected animal, which is coarse when an animal spans only a few pixels.
+
+  - id: animals_step
+    modes: [animals]
+    kind: setup
+    title: Frame rate fast enough for the movement
+    limit: 0.5
+    warn: "Individuals move a median {value} body lengths between frames (above {limit}). The tracker can swap identities at this speed; record at a higher frame rate."
+    ok: "Individuals move a median {value} body lengths between frames."
+    why: The tracker links each animal to the nearest detection in the next frame, which becomes ambiguous when animals move a large part of their own length, or of the gap to a neighbour, between frames.
+
+  # ------------------------------------------------------------------------------- cells
+  - id: cells_calibrated
+    modes: [cells]
+    kind: setup
+    title: Pixel size known
+    warn: Distances are in pixels because the file has no pixel size. Set it under Microscope calibration and analyze again.
+    ok: "Pixel size {value} µm."
+    why: Cell migration reporting standards ask for distances and speeds in physical units, together with the imaging settings behind them (Gonzalez-Beltran et al., 2020). In pixels, results can't be compared between microscopes or with published values, and the biology checks below can't run.
+
+  - id: cells_time_known
+    modes: [cells]
+    kind: setup
+    title: Time between frames known
+    warn: The file has no time between frames, so 1 frame is counted as 1 second. Set it under Microscope calibration and analyze again.
+    ok: "{value}."
+    why: Speeds, division times and MSD all depend on the time between frames, which reporting standards ask for (Gonzalez-Beltran et al., 2020).
+
+  - id: cells_size
+    modes: [cells]
+    kind: biology
+    title: Cell size is plausible
+    needs_calibration: true
+    low: 5
+    high: 60
+    skip_kinds: ["bacteria", "other"]
+    warn: "Cells measure a median {value} µm across, outside {limit}. Check the pixel size, or whether cells are being split or merged."
+    ok: "Cells measure a median {value} µm across."
+    why: Cultured mammalian cells are typically about 10 to 20 µm across, and HeLa cells about 15 to 17.5 µm, varying with growth phase (Milo et al., 2010). The range allowed here is wide, because spread cells can be much larger and some cell types smaller; a value outside it usually means the pixel size is wrong.
+
+  - id: cells_speed
+    modes: [cells]
+    kind: biology
+    title: Migration speed is plausible
+    needs_calibration: true
+    limit: 10
+    skip_kinds: ["immune cells (leukocytes)", "amoeba (e.g. Dictyostelium)", "bacteria", "other"]
+    warn: "Median speed {value} µm/min, above {limit} µm/min. That is faster than any of 54 cell types raced on the same surface. Check the pixel size and time between frames, or set the kind of cells if these are fast-moving cells."
+    ok: "Median speed {value} µm/min."
+    why: In the World Cell Race, 54 cell types migrated on the same patterned surface, and the fastest averaged 5.2 µm/min (Maiuri et al., 2012). Fast-moving immune cells and amoebae are not covered by that comparison, so this check is skipped for them.
+
+  - id: cells_step
+    modes: [cells]
+    kind: setup
+    title: Frames close enough together for tracking
+    needs_calibration: true
+    limit: 0.5
+    warn: "Cells move a median {value} cell diameters between frames (above {limit}). Tracks may jump between neighbouring cells; record more often."
+    ok: "Cells move a median {value} cell diameters between frames."
+    why: Linking cells from frame to frame becomes ambiguous when a cell moves a large part of its own size, or of the distance to its neighbours, between frames, and tracking errors then dominate the results (Meijering et al., 2012).
+
+  - id: cells_track_length
+    modes: [cells]
+    kind: setup
+    title: Cells followed long enough
+    limit: 10
+    warn: "Cells were followed for a median of {value} frames (below {limit}). Straightness and MSD are unreliable for short tracks."
+    ok: "Cells were followed for a median of {value} frames."
+    why: Straightness depends on how long each cell is followed and how often it is imaged, so short tracks bias it and make results hard to compare; direction autocorrelation over many frames is the more robust measure of persistence (Gorelik & Gautreau, 2014).
+
+  - id: cells_doubling
+    modes: [cells]
+    kind: biology
+    title: Division rate is plausible
+    limit: 8
+    only_kinds: ["adherent mammalian cells"]
+    warn: "The cell count doubles every {value} h, faster than {limit} h. That is unusually fast for mammalian cells; check for cells being counted twice, or debris counted as cells."
+    ok: "The cell count doubles every {value} h."
+    why: Cultured mammalian cells usually take about a day to divide; for HeLa cells, for example, BioNumbers lists a doubling time of about 25 hours (Milo et al., 2010). A much faster rise in the cell count more often comes from detection errors than from division.
+
+  # ------------------------------------------------------------------------------- neurons
+  - id: neurons_calibrated
+    modes: [neurons]
+    kind: setup
+    title: Pixel size known
+    warn: Sizes and distances are in pixels because the file has no pixel size. Set it under Microscope calibration and analyze again.
+    ok: "Pixel size {value} µm."
+    why: Imaging metadata such as pixel size are needed to compare results between microscopes and with published values (Sarkans et al., 2021), and the size check below can't run without it.
+
+  - id: neurons_time_known
+    modes: [neurons]
+    kind: setup
+    title: Frame rate known
+    warn: The file has no frame rate, so 1 frame is counted as 1 second, and every time, rate and duration is wrong. Set it under Microscope calibration and analyze again.
+    ok: "{value}."
+    why: Firing rates, event durations and burst timing are all computed from the frame rate.
+
+  - id: neurons_frame_rate
+    modes: [neurons]
+    analysis: activity
+    kind: biology
+    title: Frame rate fast enough for the indicator
+    needs: [indicator]
+    half_decay_s:
+      GCaMP6s: 0.5
+      GCaMP6m: 0.2
+      GCaMP6f: 0.1
+    warn: "{value} frames per second; {limit} is needed to catch the indicator's response to a single spike. Short events will be missed or merged."
+    ok: "{value} frames per second, enough for this indicator ({limit} needed)."
+    why: After a single spike, the GCaMP6 indicators fall halfway back to rest in about 0.1 s (GCaMP6f), 0.2 s (GCaMP6m) or 0.5 s (GCaMP6s) (Chen et al., 2013). Recording at least two frames within that time is needed to see such an event. For other indicators this check only flags frame rates below 2 per second.
+
+  - id: neurons_size
+    modes: [neurons]
+    analysis: activity
+    kind: biology
+    title: Neuron size is plausible
+    needs_calibration: true
+    low: 5
+    high: 40
+    warn: "Detected neurons measure a median {value} µm across, outside {limit}. Check the pixel size, or set the neuron diameter if neurons are being split or merged."
+    ok: "Detected neurons measure a median {value} µm across."
+    why: Cell bodies of mammalian cortical and hippocampal neurons are mostly about 10 to 20 µm across; a widely used reference table gives about 21 µm for rat CA1 pyramidal cells (Fiala & Harris, 1999). The allowed range is wider to cover other neuron types and species.
+
+  - id: neurons_duration
+    modes: [neurons]
+    analysis: activity
+    kind: setup
+    title: Recording long enough to estimate the resting level
+    limit: 3
+    warn: "The recording is {value} times the resting-level window (below {limit}). The resting level, and so Delta F/F, is poorly estimated; record longer or shorten the window."
+    ok: "The recording is {value} times the resting-level window."
+    why: Delta F/F divides by each neuron's resting level, which is estimated over a moving window; with only a few windows in the recording, slow changes such as bleaching are hard to separate from activity.
+
+  - id: neurites_frames
+    modes: [neurons]
+    analysis: neurites
+    kind: setup
+    title: Enough time points for growth rates
+    limit: 5
+    warn: "Only {value} time points were analyzed (below {limit}). Growth rates and growth-cone speeds are unreliable."
+    ok: "{value} time points analyzed."
+    why: Growth rates are fitted across time points, so a few frames make them sensitive to tracing errors in any single frame.
