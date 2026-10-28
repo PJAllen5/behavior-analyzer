@@ -30,6 +30,8 @@ ai = ["ultralytics>=8.3"]   # the "Animals or people (AI)" detector / --detector
 dev = ["pytest>=8", "watchdog>=4"]   # tests, and faster app reloads while editing
 # complexity-engine, for `behavetrack export-complexity --run` and the app's complexity analysis.
 complexity = ["complexity-engine @ git+https://github.com/PJAllen5/complexity-engine.git"]
+# Cellpose neuron finder (--neuron-finder cellpose); its model (~1.2 GB) downloads on first use
+cellpose = ["cellpose>=4.0"]
 
 [project.scripts]
 behavetrack = "behavetrack.cli:main"

@@ -35,7 +35,7 @@ _OPTION_FIELDS = {
     "pixel_size": "pixel_size_um", "frame_interval": "frame_interval_s", "channel": "channel",
     "cells_look": "cell_appearance", "cell_diameter": "cell_diameter_px",
     "threshold_adjust": "threshold_adjust", "analysis": "neural_analysis",
-    "find_by": "find_neurons_by", "neuropil": "neuropil_factor", "event_sd": "event_threshold_sd",
+    "find_by": "find_neurons_by", "neuron_finder": "neuron_finder", "neuropil": "neuropil_factor", "event_sd": "event_threshold_sd",
     "min_event": "min_event_dff", "baseline_window": "baseline_window_s",
     "burst_window": "burst_window_s", "burst_fraction": "burst_min_fraction",
     "neurite_width": "neurite_width_px", "frame_step": "frame_step", "sholl_step": "sholl_step_um",
@@ -77,6 +77,10 @@ def _add_common(p: argparse.ArgumentParser):
     g.add_argument("--find-by", choices=["activity", "brightness"],
                    help=f"activity: find neurons that flicker. brightness: find bright cell bodies, "
                         f"which also counts neurons that never fire (default {_NA.find_neurons_by})")
+    g.add_argument("--neuron-finder", choices=["built-in", "cellpose"],
+                   help=f"activity: how neurons are outlined (default {_NA.neuron_finder}). cellpose uses "
+                        "Cellpose (needs: pip install -e \".[cellpose]\"); more accurate on real "
+                        "two-photon data in our benchmark")
     g.add_argument("--no-drift", action="store_true", help="activity: don't correct stage drift")
     g.add_argument("--neuropil", type=float,
                    help=f"activity: share of the surrounding haze to subtract (0 = none, default {_NA.neuropil_factor})")
@@ -209,6 +213,18 @@ def cmd_check(a):
         _print_checks(folder)
 
 
+def cmd_score(a):
+    from .scoring import score_neurofinder
+
+    r = score_neurofinder(a.results, a.neurofinder, a.max_distance)
+    print(f"{r['labelled']} labelled neurons, {r['found']} found, {r['matched']} matched "
+          f"(centres within {r['max_distance_px']:g} px)")
+    print(f"  recall    {r['recall']:.0%}  (labelled neurons that were found)")
+    print(f"  precision {r['precision']:.0%}  (found neurons that are labelled)")
+    print(f"  F1        {r['f1']:.2f}")
+    print(f"Saved to {Path(a.results) / 'score.json'}")
+
+
 def cmd_details(a):
     from .metadata import FIELDS
 
@@ -311,6 +327,14 @@ def main(argv=None):
     pc.add_argument("results", nargs="+", help="results folders")
     _add_metadata(pc)
     pc.set_defaults(func=cmd_check)
+
+    ps = sub.add_parser("score", help="score a result against a benchmark's answer key")
+    ps.add_argument("results", help="results folder (from behavetrack analyze)")
+    ps.add_argument("--neurofinder", required=True, metavar="REGIONS.json",
+                    help="Neurofinder answer key (regions/regions.json in the dataset)")
+    ps.add_argument("--max-distance", type=float, default=5.0,
+                    help="a found neuron matches a labelled one if their centres are this close, in pixels (default 5)")
+    ps.set_defaults(func=cmd_score)
 
     pd_ = sub.add_parser("details", help="list the experiment details you can record")
     pd_.set_defaults(func=cmd_details)
