@@ -27,3 +27,6 @@ samples/
 build/
 .pytest_cache/
 tests/.data/
+
+# Downloaded benchmark datasets (tools/fetch_benchmarks.py)
+benchmarks/
