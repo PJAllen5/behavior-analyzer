@@ -209,6 +209,29 @@ The thresholds, explanations and sources live in `behavetrack/reference/checks.y
 papers in `behavetrack/reference/references.bib`; adjust them there. A test makes sure every
 citation matches the bibliography.
 
+## Real benchmark data
+
+`tools/fetch_benchmarks.py` downloads public datasets that come with expert answer keys, for
+testing the tracker on real recordings:
+
+| Source | What | Answer key |
+|---|---|---|
+| [Cell Tracking Challenge](https://celltrackingchallenge.net/2d-datasets/) | 10 two-dimensional time-lapses of cells (HeLa, U373, mouse stem cells and more), 36 MB to 1.6 GB | reference tracks and divisions for each cell |
+| [Neurofinder](https://github.com/codeneuro/neurofinder) | 19 two-photon calcium-imaging movies, about 1 GB each | hand-labelled neurons |
+| [idtracker.ai](https://idtracker.ai/en/latest/good_videos/videos.html) | videos of 8 to 100 zebrafish, flies and ants | the number of animals (download these by hand from its Google Drive folder) |
+
+```bash
+python tools/fetch_benchmarks.py list                  # everything available, with sizes
+python tools/fetch_benchmarks.py info Fluo-N2DL-HeLa   # details, citation, how to analyze it
+python tools/fetch_benchmarks.py get DIC-C2DH-HeLa     # shows the size and free space, then asks
+```
+
+Downloads go to `benchmarks/` (ignored by git), resume if interrupted, and are unpacked into
+their own folder. Each gets an `ABOUT.txt` with its source, citation, where its answer key
+is, and the exact `behavetrack analyze` command for each image sequence, including the
+microscope calibration and experiment details from the source, so the data checks apply.
+Please cite each dataset's source if you use it in your work.
+
 ## Complexity analysis (complexity-engine)
 
 [complexity-engine](https://github.com/PJAllen5/complexity-engine) measures how regular,
