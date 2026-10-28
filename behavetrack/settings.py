@@ -49,6 +49,7 @@ class Settings:
     #     cell_diameter_px and threshold_adjust settings above)
     neural_analysis: str = "activity"   # "activity" (calcium imaging) or "neurites" (growth)
     find_neurons_by: str = "activity"   # activity: "activity" (flicker) or "brightness" (also silent ones)
+    neuron_finder: str = "built-in"     # activity: "built-in" or "cellpose" (needs the [cellpose] extra)
     correct_drift: bool = True          # activity: line every frame up with the first
     neuropil_factor: float = 0.7        # activity: share of the surrounding haze to subtract
     baseline_window_s: float = 60.0     # activity: resting level follows changes slower than this

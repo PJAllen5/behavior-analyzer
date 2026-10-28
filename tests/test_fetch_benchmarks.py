@@ -147,10 +147,12 @@ def test_get_downloads_unpacks_and_explains(server, tmp_path, monkeypatch):
     assert "cell_line=HeLa" in about and "man_track.txt" in about
 
 
-def test_neurofinder_command_uses_frame_rate_and_indicator(tmp_path):
+def test_neurofinder_command_uses_dataset_info(tmp_path):
     folder = tmp_path / "neurofinder.00.00"
     (folder / "neurofinder.00.00" / "images").mkdir(parents=True)
-    (folder / "neurofinder.00.00" / "info.json").write_text('{"rate-hz": 8, "indicator": "GCaMP6s"}')
+    (folder / "neurofinder.00.00" / "info.json").write_text(
+        '{"rate-hz": 8, "indicator": "GCaMP6s", "pixels-per-micron": 1.15, "region": "vS1"}')
     d = fb.DATASETS["neurofinder.00.00"]
     cmd = fb.analyze_command(d, "x", folder)
     assert "--frame-interval 0.12500" in cmd and "indicator=GCaMP6s" in cmd
+    assert "--pixel-size 0.8696" in cmd and "brain_region=vS1" in cmd
