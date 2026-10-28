@@ -74,7 +74,19 @@ def score(truth_base: str, res: str) -> dict:
         "bursts_true": len(tb),
         "false_bursts": int(len(bu) - bhit),
         "max_drift_px": summ["neurons"].get("max_drift_px"),
+        "max_drift_true": _true_drift(truth_base, summ.get("fps") or 1.0),
     }
+
+
+def _true_drift(truth_base: str, fps: float) -> float | None:
+    """Largest drift built into the movie, measured from the start (as the analysis does:
+    from the average of the first 2 s, at least 20 frames)."""
+    try:
+        d = pd.read_csv(f"{truth_base}_drift.csv")[["dx", "dy"]].values
+    except FileNotFoundError:
+        return None
+    ref = d[:max(20, int(2 * fps))].mean(axis=0)
+    return round(float(np.abs(d - ref).max()), 2)
 
 
 if __name__ == "__main__":
@@ -85,4 +97,4 @@ if __name__ == "__main__":
           f"({s['events_found'] / max(s['events_true'], 1):.0%}), {s['false_events']} false events "
           f"({s['false_events'] / max(s['events_reported'], 1):.1%} of those reported)")
     print(f"Network bursts: {s['bursts_found']} of {s['bursts_true']} found, {s['false_bursts']} false")
-    print(f"Largest drift corrected: {s['max_drift_px']} px")
+    print(f"Largest drift corrected: {s['max_drift_px']} px (built into the movie: {s['max_drift_true']} px)")

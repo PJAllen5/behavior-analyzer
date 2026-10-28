@@ -190,6 +190,34 @@ def test_every_analysis_writes_checks(analyzed, name):
     by_id = _by_id(found)
     # the generated movies are recorded and calibrated well, so the setup checks pass
     for cid in ("cells_calibrated", "cells_time_known", "cells_step", "neurons_calibrated",
-                "neurons_time_known", "animals_size", "animals_step", "animals_id_breaks"):
+                "neurons_time_known", "neurons_drift", "animals_size", "animals_step", "animals_id_breaks"):
         if cid in by_id:
             assert by_id[cid].status == "ok", (cid, by_id[cid].message)
+
+
+def _drift_results(tmp_path, **neurons):
+    base = {"max_drift_px": 1.5, "max_drift_step_px": 1.2, "drift_frames_skipped": 87, "diameter_px": 12.0}
+    return _results(tmp_path, "neurons", neural_analysis="activity", width=512, height=512,
+                    frames_analyzed=3024, settings={"correct_drift": True}, neurons={**base, **neurons})
+
+
+@pytest.mark.parametrize("neurons,expect,says", [
+    ({}, "ok", "87 frames couldn't be lined up"),             # Neurofinder 00.00 after the fix
+    ({"max_drift_px": 52.96}, "warn", "% of the image"),      # ... and before it
+    ({"max_drift_px": 52.96, "max_drift_step_px": None}, "warn", "neuron diameters"),  # older results
+    ({"max_drift_step_px": 9.0}, "warn", "from one frame to the next"),
+    ({"drift_frames_skipped": 400}, "warn", "couldn't be lined up (above 5%)"),
+])
+def test_drift_check(tmp_path, neurons, expect, says):
+    c = _by_id(checks.run_checks(_drift_results(tmp_path, **neurons)))["neurons_drift"]
+    assert c.status == expect and says in c.message, c.message
+    if expect == "warn":
+        assert "--no-drift" in c.message
+
+
+def test_drift_check_skipped_without_drift_correction(tmp_path):
+    d = _drift_results(tmp_path)
+    s = json.loads((d / "summary.json").read_text())
+    s["settings"]["correct_drift"] = False
+    (d / "summary.json").write_text(json.dumps(s))
+    assert "neurons_drift" not in _by_id(checks.run_checks(d))

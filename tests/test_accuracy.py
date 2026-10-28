@@ -62,6 +62,8 @@ def test_neuron_activity(analyzed):
     assert s["false_events"] / max(s["events_reported"], 1) <= 0.02
     assert s["bursts_found"] == s["bursts_true"]
     assert s["false_bursts"] <= 1
+    assert s["max_drift_px"] == pytest.approx(s["max_drift_true"], abs=0.5)
+    assert r["summary"]["neurons"]["drift_frames_skipped"] <= 0.01 * r["summary"]["frames_analyzed"]
     assert (r["out"] / "annotated.mp4").exists()
 
 

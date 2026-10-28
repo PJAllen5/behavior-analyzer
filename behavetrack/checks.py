@@ -257,6 +257,39 @@ def _neurons_duration(r: _Result, rule):
     return ("warn" if ratio < rule["limit"] else "ok"), ratio, ""
 
 
+def _drift_reasons(r: _Result, rule) -> list[str]:
+    """Why a drift correction looks suspicious (empty if it doesn't)."""
+    n = r.summary.get("neurons", {})
+    biggest, step = n.get("max_drift_px") or 0, n.get("max_drift_step_px")
+    diam, skipped = n.get("diameter_px"), n.get("drift_frames_skipped")
+    side = min(r.summary.get("width") or 0, r.summary.get("height") or 0)
+    frames = r.summary.get("frames_analyzed") or 0
+    out = []
+    if side and biggest > rule["image_share"] * side:
+        out.append(f"that is {_fmt(100 * biggest / side)}% of the image (above {_fmt(100 * rule['image_share'])}%)")
+    if diam and biggest > rule["diameters"] * diam:
+        out.append(f"{_fmt(biggest / diam)} neuron diameters (above {_fmt(rule['diameters'])})")
+    if diam and step is not None and step > rule["step_diameters"] * diam:
+        out.append(f"it jumped by up to {_fmt(step / diam)} neuron diameters from one frame to the next "
+                   f"(above {_fmt(rule['step_diameters'])})")
+    if frames and skipped and skipped > rule["skipped_share"] * frames:
+        out.append(f"{_fmt(100 * skipped / frames)}% of frames couldn't be lined up "
+                   f"(above {_fmt(100 * rule['skipped_share'])}%)")
+    return out
+
+
+def _neurons_drift(r: _Result, rule):
+    if not r.summary.get("settings", {}).get("correct_drift", True):
+        return None
+    n = r.summary.get("neurons", {})
+    if "max_drift_px" not in n:
+        return None
+    skipped = n.get("drift_frames_skipped") or 0
+    note = (f" {skipped} frame{'s' if skipped != 1 else ''} couldn't be lined up (blank, or too different "
+            "from the rest) and took the drift of their neighbours.") if skipped else ""
+    return ("warn" if _drift_reasons(r, rule) else "ok"), float(n["max_drift_px"]), note
+
+
 def _neurites_frames(r: _Result, rule):
     n = r.summary.get("frames_analyzed", 0)
     return ("warn" if n < rule["limit"] else "ok"), n, ""
@@ -280,6 +313,7 @@ COMPUTE = {
     "neurons_frame_rate": _neurons_frame_rate,
     "neurons_size": _neurons_size,
     "neurons_duration": _neurons_duration,
+    "neurons_drift": _neurons_drift,
     "neurites_frames": _neurites_frames,
 }
 
@@ -287,6 +321,8 @@ COMPUTE = {
 def _limit_text(rule: dict, r: _Result) -> str:
     if "low" in rule:
         return _range_text(rule)
+    if rule["id"] == "neurons_drift":
+        return "; ".join(_drift_reasons(r, rule))
     if rule["id"] == "neurons_frame_rate":
         half = rule["half_decay_s"].get(r.meta.get("indicator") or "")
         return f"{_fmt(2 / half if half else 2.0)} per second"

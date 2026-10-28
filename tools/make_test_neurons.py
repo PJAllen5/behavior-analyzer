@@ -5,7 +5,8 @@ Neurons fire on their own and also join network bursts every 8-15 s. The movie h
 the things real recordings have: neuropil haze that brightens during bursts,
 photobleaching, slow stage drift, and camera noise.
 
-Writes <out>.tif plus <out>_neurons.csv, <out>_spikes.csv and <out>_bursts.csv.
+Writes <out>.tif plus <out>_neurons.csv, <out>_spikes.csv, <out>_bursts.csv and
+<out>_drift.csv (how far each frame was moved).
 
   python tools/make_test_neurons.py samples/test_neurons
 """
@@ -105,5 +106,7 @@ pd.DataFrame({"neuron_id": np.arange(1, N + 1), "x": [p[0] for p in pos], "y": [
               "silent": silent, "baseline": base.round(1)}).to_csv(f"{out}_neurons.csv", index=False)
 sp.round(4).to_csv(f"{out}_spikes.csv", index=False)
 pd.DataFrame(bursts).to_csv(f"{out}_bursts.csv", index=False)
+pd.DataFrame({"frame": np.arange(T), "dx": dx.round(4), "dy": dy.round(4)}).to_csv(
+    f"{out}_drift.csv", index=False)
 print(f"wrote {out}.tif: {T} frames at {FPS:g}/s, {N} neurons ({silent.sum()} silent), "
       f"{len(sp)} firing events, {len(bursts)} network bursts")
