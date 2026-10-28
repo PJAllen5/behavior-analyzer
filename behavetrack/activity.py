@@ -1,7 +1,8 @@
 """Neural firing activity from calcium (or voltage) imaging movies.
 
 Steps:
-  1. drift correction: every frame is lined up with the start of the movie
+  1. drift correction: every frame is lined up with the start of the movie (frames that
+     can't be lined up, such as blank ones, take the drift of their neighbours)
   2. find neurons: groups of pixels that flicker together (local correlation), or bright
      cell bodies (which also finds neurons that never fire)
   3. fluorescence of each neuron and of the haze around it (neuropil), frame by frame
@@ -79,8 +80,42 @@ def _diameter_guess(ref: np.ndarray) -> float:
     return float(np.clip(d, 5.0, min(ref.shape) / 6))
 
 
+def clean_shifts(raw: np.ndarray, resp: np.ndarray, diam: float, max_shift: float,
+                 fps: float) -> tuple[np.ndarray, np.ndarray]:
+    """Keep only drift estimates that can be trusted; fill the rest in from their neighbours.
+
+    Phase correlation always returns some shift, even for a frame that has nothing to line up
+    (a blank or corrupted frame, a flash): those come back with a weak match and a wild shift.
+    A frame's estimate is kept when its match is at least half as strong as is typical for the
+    movie and it lands within a quarter of a neuron of the last kept frame. Real drift is slow,
+    and a real sudden jump of the stage is accepted once a second's worth of strong frames
+    agree on the new position. Returns (shifts, which frames were kept)."""
+    T = len(raw)
+    if not T:
+        return np.zeros((0, 2)), np.zeros(0, bool)
+    strong = (resp >= 0.5 * np.median(resp)) & (np.abs(raw).max(axis=1) <= max_shift)
+    step = max(1.5, diam / 4)
+    confirm = max(5, int(round(fps)))
+    good = np.zeros(T, bool)
+    cur, pending = None, []
+    for i in np.flatnonzero(strong):
+        s = raw[i]
+        if cur is None or np.hypot(*(s - cur)) <= step:
+            good[i], cur, pending = True, s, []
+            continue
+        pending = [j for j in pending if np.hypot(*(raw[j] - s)) <= step] + [i]
+        if len(pending) >= confirm:
+            good[pending], cur, pending = True, s, []
+    idx = np.flatnonzero(good)
+    if not len(idx):
+        return np.zeros((T, 2)), good
+    t = np.arange(T)
+    return np.column_stack([np.interp(t, idx, raw[idx, k]) for k in (0, 1)]), good
+
+
 def summary_images(mv: Movie, diam: float | None, correct_drift: bool, progress=None):
-    """Pass 1: drift of every frame, plus the mean image and the local-correlation image
+    """Drift of every frame (its own pass through the movie, so untrustworthy estimates can be
+    spotted against the whole recording), then the mean image and the local-correlation image
     (how much each pixel flickers in step with its neighbours)."""
     n_ref = min(mv.last - mv.first, max(20, int(2 * mv.fps)))
     ref_frames = []
@@ -106,17 +141,21 @@ def summary_images(mv: Movie, diam: float | None, correct_drift: bool, progress=
     ema = None
     alpha = 1.0 / max(5.0, 1.0 * mv.fps)   # remove slow changes (bleaching) over about 1 s
     sig_space = max(2.0 * diam, 8.0)       # remove broad haze (neuropil) from the activity map
-    prev = (0.0, 0.0)
+    skipped = 0
+    if correct_drift:
+        raw, resp = np.zeros((total, 2)), np.zeros(total)
+        n = 0
+        for i, r in enumerate(mv.raw()):
+            # copies: OpenCV changes its inputs in place
+            raw[i], resp[i] = cv2.phaseCorrelate(ref_s.copy(), _structure(r), win.copy())
+            n += 1
+            _report(n, total, "Measuring drift", progress)
+        shifts, good = clean_shifts(raw[:n], resp[:n], diam, max_shift, mv.fps)
+        skipped = int(n - good.sum())
     n = 0
     for i, r in enumerate(mv.raw()):
-        if correct_drift:
-            # copies: OpenCV changes its inputs in place
-            (dx, dy), resp = cv2.phaseCorrelate(ref_s.copy(), _structure(r), win.copy())
-            if resp < 0.03 or abs(dx) > max_shift or abs(dy) > max_shift:
-                dx, dy = prev
-            prev = (dx, dy)
-            shifts[i] = dx, dy
-            r = _move(r, (dx, dy))
+        if correct_drift and i < len(shifts):
+            r = _move(r, shifts[i])
         r = r.astype(np.float64)
         S_raw += r
         if ema is None:
@@ -161,7 +200,7 @@ def summary_images(mv: Movie, diam: float | None, correct_drift: bool, progress=
     valid = np.zeros((H, W), bool)
     valid[edge:H - edge, edge:W - edge] = True
     return {"mean": S_raw / n, "corr": corr_img, "skew": skew, "valid": valid,
-            "shifts": shifts, "diameter": diam, "frames": n}
+            "shifts": shifts, "drift_skipped": skipped, "diameter": diam, "frames": n}
 
 
 def find_neurons(img: dict, diam: float, by: str = "activity", adjust: float = 0.0) -> np.ndarray:
@@ -469,6 +508,9 @@ def run(src, out_dir: Path, s, fps: float, first: int, last: int, scale: float,
     _write_roi_map(out_dir / "rois.png", img["mean"], img["corr"], lab)
     info = {"neurons_found": N, "diameter_px": round(diam / scale, 2), "frames": T,
             "max_drift_px": round(float(np.abs(img["shifts"]).max() / scale), 2) if T else 0.0,
+            "max_drift_step_px": round(float(np.abs(np.diff(img["shifts"], axis=0)).max() / scale), 2)
+            if T > 1 else 0.0,
+            "drift_frames_skipped": img["drift_skipped"],
             "length_unit": "µm" if L == "um" else "pixels", "calibrated": bool(pixel_size), **finder_info}
     if N == 0:
         for f in ("neurons", "events", "bursts", "traces_dff", "traces_raw", "correlations", "frames"):

@@ -154,9 +154,16 @@ On a real two-photon recording with 330 hand-labelled neurons (Neurofinder 00.00
 | Built-in (best of four settings) | 18% | 37% | 0.24 |
 | Cellpose | 45% | 67% | 0.54 |
 
-**If the movie is already motion-corrected** (as Neurofinder's are), turn off *Correct drift*
-(`--no-drift`). On that recording, drift correction found spurious shifts and lowered Cellpose's
-F1 from 0.54 to 0.43.
+**Drift correction on movies that are already motion-corrected.** Neurofinder's movies are
+already corrected, and Neurofinder 00.00 also has a run of almost blank frames. Drift correction
+used to line those frames up with shifts of up to 53 pixels, which lowered Cellpose's F1 to 0.43.
+It now skips frames it can't line up reliably and gives them the drift of their neighbours, so
+Cellpose scores 0.53 with drift correction on and 0.52 with `--no-drift`. (Those three runs were
+made without experiment details such as organism or brain region, so they are not exactly the
+setup behind the 0.54 above.) The *Drift correction is plausible* data check (`neurons_drift`)
+warns when a correction is large compared with the image or a neuron, jumps between frames,
+or skips many frames. If it warns on a movie that was already motion-corrected, turn off
+*Correct drift* (`--no-drift`).
 
 > Stringer, C., Wang, T., Michaelos, M. & Pachitariu, M. Cellpose: a generalist algorithm for
 > cellular segmentation. *Nature Methods* 18, 100–106 (2021).

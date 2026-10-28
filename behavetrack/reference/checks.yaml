@@ -181,6 +181,19 @@ checks:
     ok: "The recording is {value} times the resting-level window."
     why: Delta F/F divides by each neuron's resting level, which is estimated over a moving window; with only a few windows in the recording, slow changes such as bleaching are hard to separate from activity.
 
+  - id: neurons_drift
+    modes: [neurons]
+    analysis: activity
+    kind: setup
+    title: Drift correction is plausible
+    image_share: 0.05      # largest correction, as a share of the image's shorter side
+    diameters: 2           # largest correction, in neuron diameters
+    step_diameters: 0.5    # largest change in correction between neighbouring frames, in neuron diameters
+    skipped_share: 0.05    # share of frames that couldn't be lined up
+    warn: "Frames were moved by up to {value} pixels to line them up: {limit}. The correction may have failed. If the movie was already motion-corrected, analyze again with --no-drift (in the app, turn off Correct drift) and compare."
+    ok: "Frames were moved by up to {value} pixels to line them up."
+    why: Drift correction lines every frame up with the start of the movie by finding the shift at which the two match best. Stage and tissue drift is usually slow and small next to the image. A frame with little to match, such as a blank or corrupted frame, or a movie that was already motion-corrected, can instead give a large or jumpy shift; moving frames by that much smears neurons together and moves them out of their outlines, which changes which neurons are found and their traces.
+
   - id: neurites_frames
     modes: [neurons]
     analysis: neurites
