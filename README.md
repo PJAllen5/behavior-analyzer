@@ -421,6 +421,9 @@ settings work for ants, birds and people.
 
 ## Developing
 
+Every design step and decision so far, with the reasoning and evidence behind it, is in
+[docs/PROJECT_LOG.md](docs/PROJECT_LOG.md). Add an entry when you make a decision someone might later ask "why?" about.
+
 ```bash
 .venv/bin/pip install -e ".[ai,dev]"      # once: the code, the AI detector, and test tools
 .venv/bin/python -m pytest -m "not slow"   # quick tests, a few seconds
