@@ -1,0 +1,26 @@
+# Runs the full test suite on every pull request and every push to main.
+# A red X on a PR means a test failed: open "Details" to see which one.
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      # dev = pytest; complexity = the export tests that need complexity-engine.
+      # The AI detector (ultralytics) and Cellpose are left out: they're large and
+      # no test needs them (the Cellpose tests skip themselves).
+      - name: Install
+        run: pip install -e ".[dev,complexity]"
+      - name: Run tests (including slow ones)
+        run: python -m pytest -q
